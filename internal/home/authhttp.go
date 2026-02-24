@@ -430,7 +430,7 @@ func (mw *authMiddlewareDefault) handlePublicAccess(
 	}
 
 	if path == "/" || path == "/index.html" {
-		http.Redirect(w, r, "login.html", http.StatusFound)
+		w.WriteHeader(http.StatusForbidden)
 
 		return true
 	}
