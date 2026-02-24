@@ -35,6 +35,7 @@
 AdGuardHome
 AdGuardHome.exe
 AdGuardHome.yaml*
+/aghome/
 coverage.txt
 node_modules/
 tmp/

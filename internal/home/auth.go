@@ -148,6 +148,7 @@ func (a *auth) middleware() (mw httputil.Middleware) {
 		trustedProxies: a.trustedProxies,
 		sessions:       a.sessions,
 		users:          a.users,
+		loginPath:      config.HTTPConfig.LoginPath,
 	})
 }
 
