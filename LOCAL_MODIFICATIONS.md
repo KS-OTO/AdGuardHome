@@ -4,45 +4,47 @@
 
 ## 修改内容
 
-### 访问控制修改
+### 可配置登录页路径
 
-**文件**: `internal/home/authhttp.go`
+新增 `http.login_path` 配置项，允许自定义登录页访问路径，隐藏默认的 `/login.html` 入口。
 
-**位置**: `handlePublicAccess` 函数（约第 432 行）
+**修改文件：**
 
-**修改说明**: 访问根路径（`/` 或 `/index.html`）时返回 403 Forbidden，而不是自动重定向到登录页。
+- `internal/home/config.go` — `httpConfig` 新增 `LoginPath` 字段
+- `internal/home/authhttp.go` — 认证中间件支持自定义登录路径
+  - `isPublicResource`：配置自定义路径后，原始 `/login.*` 不再是公开资源
+  - `handlePublicAccess`：自定义路径请求内部重写为 `/login.html`；原始路径返回 403；根路径返回 403
+  - `handleAuthenticatedUser`：已认证用户访问自定义路径也重定向到 `/`
+  - `handleLogout`：登出后重定向到自定义路径
+- `internal/home/auth.go` — 将 `LoginPath` 配置传入认证中间件
+- `internal/home/authglinet.go` — 适配 `isPublicResource` 签名变更
+- `internal/home/authhttp_internal_test.go` — 更新测试用例
 
-```go
-// 修改后
-if path == "/" || path == "/index.html" {
-    w.WriteHeader(http.StatusForbidden)
-    return true
-}
+### 上游自动同步
+
+- `.github/workflows/sync-upstream.yml` — 每天自动同步上游仓库更新，冲突时创建 PR
+
+## 配置示例
+
+```yaml
+http:
+  address: 0.0.0.0:3000
+  session_ttl: 720h
+  login_path: wsshuiji.html
 ```
-
-**测试文件**: `internal/home/authhttp_internal_test.go` - 更新了相关测试用例的预期状态码
 
 ## 维护指南
 
-### 自动维护（推荐）
+### 上游同步
 
-项目已配置 `post-merge` hook，每次执行 `git pull` 后会自动：
+GitHub Actions 每天 UTC 2:00 自动从上游拉取更新并合并。如有冲突会自动创建 PR，需手动解决后合并。也可在 Actions 页面手动触发同步。
 
-1. 恢复被覆盖的 `README.md`（从本地备份）
-2. 应用代码补丁（`my-fixes.patch`）
-
-### 手动维护
-
-如果 hook 提示冲突，请手动解决后执行：
+### 重新编译
 
 ```bash
-git add -A
-```
+# 安装前端依赖并构建
+cd client && npm ci && npm run build-prod && cd ..
 
-### 重新生成补丁
-
-如果修改了更多文件，更新补丁：
-
-```bash
-git diff internal/home/authhttp.go internal/home/authhttp_internal_test.go README.md > my-fixes.patch
+# 编译 Linux 二进制
+GOOS=linux GOARCH=amd64 go build -o AdGuardHome_linux_amd64 -ldflags "-s -w" .
 ```
