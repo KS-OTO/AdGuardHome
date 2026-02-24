@@ -289,9 +289,9 @@ func isPublicResource(p, customLogin string) (ok bool) {
 		panic(fmt.Errorf("bad asset pattern: %w", err))
 	}
 
-	// When a custom login path is configured, the original /login.* paths
-	// are not public.  The custom path is handled separately in
-	// handlePublicAccess.
+	// When a custom login path is configured, only /login.html is hidden;
+	// the login page's JS and CSS assets (e.g. /login.*.js, /login.*.css)
+	// must remain public so the page can render.
 	var isLogin bool
 	if customLogin == "" {
 		isLogin, err = path.Match("/login.*", p)
@@ -299,6 +299,18 @@ func isPublicResource(p, customLogin string) (ok bool) {
 			// Same as above.
 			panic(fmt.Errorf("bad login pattern: %w", err))
 		}
+	} else {
+		isLoginJS, errJS := path.Match("/login.*.js", p)
+		if errJS != nil {
+			panic(fmt.Errorf("bad login js pattern: %w", errJS))
+		}
+
+		isLoginCSS, errCSS := path.Match("/login.*.css", p)
+		if errCSS != nil {
+			panic(fmt.Errorf("bad login css pattern: %w", errCSS))
+		}
+
+		isLogin = isLoginJS || isLoginCSS
 	}
 
 	// TODO(s.chzhen):  Implement a more strict version.
@@ -453,8 +465,10 @@ func (mw *authMiddlewareDefault) handleCustomLoginAccess(
 		return false
 	}
 
-	// Block direct access to the original login resources.
-	if p == "/login.html" || p == "/login.js" || p == "/login.css" {
+	// Block direct access to the original login page only.
+	// Login JS/CSS assets (with hashed names) are allowed through
+	// isPublicResource so the custom login page can render.
+	if p == "/login.html" {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 
 		return true
