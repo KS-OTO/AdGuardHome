@@ -8,8 +8,8 @@
   'push':
     'branches':
     - '*'
-    'tags':
-    - 'v*'
+    'tags-ignore':
+    - '**'
   'pull_request':
 
 'jobs':
