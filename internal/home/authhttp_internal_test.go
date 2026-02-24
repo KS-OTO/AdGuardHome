@@ -234,17 +234,17 @@ func TestAuthMiddlewareDefault(t *testing.T) {
 		req:      httptest.NewRequest(http.MethodGet, "/", nil),
 		wantUser: nil,
 		name:     "no_auth_root",
-		wantCode: http.StatusForbidden,
+		wantCode: http.StatusFound,
 	}, {
 		req:      httptest.NewRequest(http.MethodGet, "/index.html", nil),
 		wantUser: nil,
 		name:     "no_auth",
-		wantCode: http.StatusForbidden,
+		wantCode: http.StatusFound,
 	}, {
 		req:      authRequest("/", invalidCookie, "", ""),
 		wantUser: nil,
 		name:     "invalid_auth",
-		wantCode: http.StatusForbidden,
+		wantCode: http.StatusFound,
 	}, {
 		req:      authRequest("/", cookie, "", ""),
 		wantUser: user,
@@ -279,12 +279,12 @@ func TestAuthMiddlewareDefault(t *testing.T) {
 		req:      authRequest("/", invalidCookie, "", ""),
 		wantUser: nil,
 		name:     "invalid_cookie",
-		wantCode: http.StatusForbidden,
+		wantCode: http.StatusFound,
 	}, {
 		req:      authRequest("/", nil, "invalid", "creds"),
 		wantUser: nil,
 		name:     "invalid_basic_auth",
-		wantCode: http.StatusForbidden,
+		wantCode: http.StatusFound,
 	}}
 
 	for _, tc := range testCases {

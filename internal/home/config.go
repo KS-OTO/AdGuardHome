@@ -190,6 +190,11 @@ type httpConfig struct {
 	// SessionTTL for a web session.
 	// An active session is automatically refreshed once a day.
 	SessionTTL timeutil.Duration `yaml:"session_ttl"`
+
+	// LoginPath is the custom login page path.  When set, the default
+	// /login.html is hidden and only the custom path can be used to access
+	// the login page.  For example, "wsshuiji.html".
+	LoginPath string `yaml:"login_path"`
 }
 
 // httpPprofConfig is the block with pprof HTTP configuration.
