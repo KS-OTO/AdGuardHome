@@ -224,12 +224,17 @@ func newCookie(
 func (web *webAPI) handleLogout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	loginPage := "/login.html"
+	if lp := config.HTTPConfig.LoginPath; lp != "" {
+		loginPage = "/" + lp
+	}
+
 	respHdr := w.Header()
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
 		// The only error that is returned from r.Cookie is [http.ErrNoCookie].
 		// The user is already logged out.
-		respHdr.Set(httphdr.Location, "/login.html")
+		respHdr.Set(httphdr.Location, loginPage)
 		w.WriteHeader(http.StatusFound)
 
 		return
@@ -259,7 +264,7 @@ func (web *webAPI) handleLogout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	}
 
-	respHdr.Set(httphdr.Location, "/login.html")
+	respHdr.Set(httphdr.Location, loginPage)
 	respHdr.Set(httphdr.SetCookie, c.String())
 	w.WriteHeader(http.StatusFound)
 }
@@ -274,7 +279,9 @@ func (web *webAPI) registerAuthHandlers() {
 }
 
 // isPublicResource returns true if p is a path to a public resource.
-func isPublicResource(p string) (ok bool) {
+// customLogin is the custom login page path from configuration; when non-empty,
+// the original /login.* paths are no longer considered public.
+func isPublicResource(p string, customLogin string) (ok bool) {
 	isAsset, err := path.Match("/assets/*", p)
 	if err != nil {
 		// The only error that is returned from path.Match is
@@ -282,10 +289,16 @@ func isPublicResource(p string) (ok bool) {
 		panic(fmt.Errorf("bad asset pattern: %w", err))
 	}
 
-	isLogin, err := path.Match("/login.*", p)
-	if err != nil {
-		// Same as above.
-		panic(fmt.Errorf("bad login pattern: %w", err))
+	// When a custom login path is configured, the original /login.* paths
+	// are not public.  The custom path is handled separately in
+	// handlePublicAccess.
+	var isLogin bool
+	if customLogin == "" {
+		isLogin, err = path.Match("/login.*", p)
+		if err != nil {
+			// Same as above.
+			panic(fmt.Errorf("bad login pattern: %w", err))
+		}
 	}
 
 	// TODO(s.chzhen):  Implement a more strict version.
@@ -333,6 +346,11 @@ type authMiddlewareDefaultConfig struct {
 
 	// users contains web user information.  It must not be nil.
 	users aghuser.DB
+
+	// loginPath is the custom login page path.  When non-empty, the default
+	// /login.html is hidden and only this custom path can access the login
+	// page.
+	loginPath string
 }
 
 // authMiddlewareDefault is the default authentication middleware.  It searches
@@ -344,6 +362,7 @@ type authMiddlewareDefault struct {
 	trustedProxies netutil.SubnetSet
 	sessions       aghuser.SessionStorage
 	users          aghuser.DB
+	loginPath      string
 }
 
 // newAuthMiddlewareDefault returns the new properly initialized
@@ -355,6 +374,7 @@ func newAuthMiddlewareDefault(c *authMiddlewareDefaultConfig) (mw *authMiddlewar
 		trustedProxies: c.trustedProxies,
 		sessions:       c.sessions,
 		users:          c.users,
+		loginPath:      c.loginPath,
 	}
 }
 
@@ -404,7 +424,12 @@ func (mw *authMiddlewareDefault) handleAuthenticatedUser(
 		return false
 	}
 
-	if path == "/login.html" {
+	isLoginPage := path == "/login.html"
+	if mw.loginPath != "" {
+		isLoginPage = isLoginPage || path == "/"+mw.loginPath
+	}
+
+	if isLoginPage {
 		http.Redirect(w, r, "/", http.StatusFound)
 
 		return true
@@ -423,14 +448,38 @@ func (mw *authMiddlewareDefault) handlePublicAccess(
 	h http.Handler,
 	path string,
 ) (ok bool) {
-	if isPublicResource(path) {
+	customLogin := mw.loginPath
+	hasCustomLogin := customLogin != ""
+
+	// When a custom login path is configured, block direct access to the
+	// original login.html.
+	if hasCustomLogin && (path == "/login.html" || path == "/login.js" || path == "/login.css") {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+
+		return true
+	}
+
+	// When a custom login path is configured, rewrite the custom path to
+	// the actual login.html so that the file server can serve it.
+	if hasCustomLogin && path == "/"+customLogin {
+		r.URL.Path = "/login.html"
+		h.ServeHTTP(w, r)
+
+		return true
+	}
+
+	if isPublicResource(path, customLogin) {
 		h.ServeHTTP(w, r)
 
 		return true
 	}
 
 	if path == "/" || path == "/index.html" {
-		w.WriteHeader(http.StatusForbidden)
+		if hasCustomLogin {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+		} else {
+			http.Redirect(w, r, "login.html", http.StatusFound)
+		}
 
 		return true
 	}
