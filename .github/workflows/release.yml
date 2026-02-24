@@ -37,41 +37,97 @@ jobs:
       - name: Build frontend
         run: npm --prefix client run build-prod
 
-      - name: Build binaries
+      - name: Build and package binaries
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          mkdir -p dist
 
+          # os;arch;arm;mips
           platforms=(
-            "linux/amd64"
-            "linux/arm64"
-            "linux/arm"
-            "darwin/amd64"
-            "darwin/arm64"
-            "windows/amd64"
+            "darwin;amd64;;"
+            "darwin;arm64;;"
+            "freebsd;386;;"
+            "freebsd;amd64;;"
+            "freebsd;arm;5;"
+            "freebsd;arm;6;"
+            "freebsd;arm;7;"
+            "freebsd;arm64;;"
+            "linux;386;;"
+            "linux;amd64;;"
+            "linux;arm;5;"
+            "linux;arm;6;"
+            "linux;arm;7;"
+            "linux;arm64;;"
+            "linux;mips;;softfloat"
+            "linux;mips64;;softfloat"
+            "linux;mips64le;;softfloat"
+            "linux;mipsle;;softfloat"
+            "linux;ppc64le;;"
+            "linux;riscv64;;"
+            "openbsd;amd64;;"
+            "openbsd;arm64;;"
+            "windows;386;;"
+            "windows;amd64;;"
+            "windows;arm64;;"
           )
 
-          for platform in "${platforms[@]}"; do
-            IFS='/' read -r GOOS GOARCH <<< "$platform"
-            output="dist/AdGuardHome_${GOOS}_${GOARCH}"
-            if [ "$GOOS" = "windows" ]; then
+          mkdir -p dist
+
+          for entry in "${platforms[@]}"; do
+            IFS=';' read -r os arch arm mips <<< "$entry"
+
+            # Determine archive and directory names
+            if [ -n "$arm" ]; then
+              dir_name="AdGuardHome_${os}_${arch}_${arm}"
+              ar_name="AdGuardHome_${os}_${arch}v${arm}"
+            elif [ -n "$mips" ]; then
+              dir_name="AdGuardHome_${os}_${arch}_${mips}"
+              ar_name="${dir_name}"
+            else
+              dir_name="AdGuardHome_${os}_${arch}"
+              ar_name="${dir_name}"
+            fi
+
+            build_dir="dist/${dir_name}/AdGuardHome"
+            mkdir -p "$build_dir"
+
+            # Binary output path
+            output="${build_dir}/AdGuardHome"
+            if [ "$os" = "windows" ]; then
               output="${output}.exe"
             fi
 
-            echo "Building ${GOOS}/${GOARCH}..."
-            GOOS=$GOOS GOARCH=$GOARCH go build \
-              -ldflags "-s -w -X github.com/AdguardTeam/AdGuardHome/internal/version.version=${VERSION}" \
-              -o "$output" .
+            echo "Building ${os}/${arch} arm=${arm} mips=${mips}..."
+            GOOS="$os" GOARCH="$arch" GOARM="${arm}" GOMIPS="${mips}" \
+              go build -ldflags "-s -w" -o "$output" .
+
+            # Copy docs into the package
+            cp CHANGELOG.md LICENSE.txt README.md "$build_dir/"
+
+            # Create archive
+            case "$os" in
+              darwin|windows)
+                (cd "dist/${dir_name}" && zip -9 -q -r "../../dist/${ar_name}.zip" ./AdGuardHome)
+                ;;
+              *)
+                tar -C "dist/${dir_name}" -czf "dist/${ar_name}.tar.gz" ./AdGuardHome
+                ;;
+            esac
+
+            # Clean up build directory
+            rm -rf "dist/${dir_name}"
           done
 
-      - name: Generate checksums
-        run: |
-          cd dist
-          sha256sum * > checksums.txt
+          # Pack frontend
+          tar -czf dist/AdGuardHome_frontend.tar.gz ./build
+
+          # Generate checksums
+          (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            dist/*
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
