@@ -440,6 +440,37 @@ func (mw *authMiddlewareDefault) handleAuthenticatedUser(
 	return true
 }
 
+// handleCustomLoginAccess handles requests related to the custom login path.
+// It returns true if the request was handled.
+func (mw *authMiddlewareDefault) handleCustomLoginAccess(
+	w http.ResponseWriter,
+	r *http.Request,
+	h http.Handler,
+	p string,
+) (ok bool) {
+	customLogin := mw.loginPath
+	if customLogin == "" {
+		return false
+	}
+
+	// Block direct access to the original login resources.
+	if p == "/login.html" || p == "/login.js" || p == "/login.css" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+
+		return true
+	}
+
+	// Rewrite the custom path to the actual login.html.
+	if p == "/"+customLogin {
+		r.URL.Path = "/login.html"
+		h.ServeHTTP(w, r)
+
+		return true
+	}
+
+	return false
+}
+
 // handlePublicAccess handles request if user is trying to access public or root
 // pages.
 func (mw *authMiddlewareDefault) handlePublicAccess(
@@ -448,34 +479,18 @@ func (mw *authMiddlewareDefault) handlePublicAccess(
 	h http.Handler,
 	path string,
 ) (ok bool) {
-	customLogin := mw.loginPath
-	hasCustomLogin := customLogin != ""
-
-	// When a custom login path is configured, block direct access to the
-	// original login.html.
-	if hasCustomLogin && (path == "/login.html" || path == "/login.js" || path == "/login.css") {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-
+	if mw.handleCustomLoginAccess(w, r, h, path) {
 		return true
 	}
 
-	// When a custom login path is configured, rewrite the custom path to
-	// the actual login.html so that the file server can serve it.
-	if hasCustomLogin && path == "/"+customLogin {
-		r.URL.Path = "/login.html"
-		h.ServeHTTP(w, r)
-
-		return true
-	}
-
-	if isPublicResource(path, customLogin) {
+	if isPublicResource(path, mw.loginPath) {
 		h.ServeHTTP(w, r)
 
 		return true
 	}
 
 	if path == "/" || path == "/index.html" {
-		if hasCustomLogin {
+		if mw.loginPath != "" {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 		} else {
 			http.Redirect(w, r, "login.html", http.StatusFound)
