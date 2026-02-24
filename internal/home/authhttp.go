@@ -281,7 +281,7 @@ func (web *webAPI) registerAuthHandlers() {
 // isPublicResource returns true if p is a path to a public resource.
 // customLogin is the custom login page path from configuration; when non-empty,
 // the original /login.* paths are no longer considered public.
-func isPublicResource(p string, customLogin string) (ok bool) {
+func isPublicResource(p, customLogin string) (ok bool) {
 	isAsset, err := path.Match("/assets/*", p)
 	if err != nil {
 		// The only error that is returned from path.Match is
