@@ -97,7 +97,7 @@ jobs:
             fi
 
             echo "Building ${os}/${arch} arm=${arm} mips=${mips}..."
-            GOOS="$os" GOARCH="$arch" GOARM="${arm}" GOMIPS="${mips}" \
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOARM="${arm}" GOMIPS="${mips}" \
               go build -ldflags "-s -w" -o "$output" .
 
             # Copy docs into the package
