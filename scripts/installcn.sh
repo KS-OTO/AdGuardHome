@@ -484,15 +484,25 @@ rerun_with_root() {
 download() {
 	echo '=== 开始下载新版本 ==='
 	echo "检测结果：目标版本 $tag"
-	echo "下一步：从 $url 下载包到 $pkg_name"
+	echo "下一步：从 GitHub 下载版本 $tag"
 
-	log "从 $url 下载包到 $pkg_name"
+	# 使用 curl 下载并显示进度
+	if [ "$download_func" = 'download_curl' ]; then
+		curl -L -S --progress-bar "$url" -o "$pkg_name"
+	elif [ "$download_func" = 'download_wget' ]; then
+		wget --show-progress "$url" -O "$pkg_name"
+	else
+		# fetch 不支持进度条
+		"$download_func" "$url" "$pkg_name"
+	fi
 
-	if ! "$download_func" "$url" "$pkg_name"; then
+	if [ ! -f "$pkg_name" ]; then
 		error_exit "无法从 $url 下载包到 $pkg_name"
 	fi
 
-	log "成功下载 $pkg_name"
+	# 显示下载的文件大小
+	downloaded_size="$(ls -lh "$pkg_name" | awk '{print $5}')"
+	log "成功下载 $pkg_name (大小: $downloaded_size)"
 	echo '=== 下载完成 ==='
 }
 
@@ -546,27 +556,35 @@ handle_existing() {
 	# 检查默认安装目录
 	actual_agh_dir="$agh_dir"
 	if ! [ -d "$agh_dir" ]; then
-		echo "检测结果：默认安装目录 $agh_dir 不存在"
-
 		# 如果有运行的服务，尝试从服务文件中找到实际安装目录
 		if [ "$running_service" -eq '1' ]; then
 			if [ -f '/etc/systemd/system/AdGuardHome.service' ]; then
 				actual_dir="$(grep 'WorkingDirectory=' /etc/systemd/system/AdGuardHome.service | cut -d'=' -f2)"
 				if [ "$actual_dir" != '' ] && [ "$actual_dir" != "$agh_dir" ]; then
-					echo "检测结果：从服务文件检测到实际安装目录: $actual_dir"
 					actual_agh_dir="$actual_dir"
+					if [ "$actual_dir" != "$agh_dir" ]; then
+						echo "检测结果：检测到运行的 AdGuardHome 服务，实际安装目录: $actual_dir（非默认路径）"
+					else
+						echo "检测结果：检测到运行的 AdGuardHome 服务，安装目录: $actual_dir"
+					fi
 				fi
 			fi
 		else
 			# 没有运行的服务，检查常见安装目录
 			for check_dir in /root/AdGuardHome /usr/local/AdGuardHome /home/*/AdGuardHome; do
 				if [ -d "$check_dir" ] && [ -f "$check_dir/AdGuardHome" ]; then
-					echo "检测结果：检测到 AdGuardHome 安装在: $check_dir"
 					actual_agh_dir="$check_dir"
+					if [ "$check_dir" != "$agh_dir" ]; then
+						echo "检测结果：检测到 AdGuardHome 安装在: $check_dir（非默认路径）"
+					else
+						echo "检测结果：检测到 AdGuardHome 安装在: $check_dir"
+					fi
 					break
 				fi
 			done
 		fi
+	else
+		echo "检测结果：默认安装目录 $agh_dir 已存在"
 	fi
 
 	# 如果仍然没有找到安装目录，且不是卸载操作，则继续
@@ -584,8 +602,6 @@ handle_existing() {
 
 	existing_adguard_home="$(ls -1 -A "$actual_agh_dir")"
 	if [ "$existing_adguard_home" != '' ]; then
-		echo "检测结果：检测到现有的 AdGuard Home 安装在 $actual_agh_dir"
-
 		if [ "$reinstall" -ne '1' ] && [ "$uninstall" -ne '1' ]; then
 			error_exit \
 				"要使用此脚本重新安装/卸载 AdGuard Home，请指定 '-r' 或 '-u' 标志之一"
@@ -683,15 +699,16 @@ tag=''
 parse_opts "$@"
 
 echo '启动 AdGuard Home 安装脚本'
+
+configure
+check_required
+
 echo '=== 初始化检测 ==='
 echo "检测结果：操作系统 $os"
 echo "检测结果：CPU 类型 $cpu"
 echo "检测结果：安装目录 $out_dir"
 echo "下一步：开始安装流程"
 echo ''
-
-configure
-check_required
 
 if ! is_root; then
 	rerun_with_root
