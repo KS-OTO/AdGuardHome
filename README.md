@@ -6,6 +6,48 @@
 
 AdGuard Home 是一个全网级别的广告和追踪器拦截 DNS 服务器。配置完成后，它能覆盖你所有的家庭设备，无需安装任何客户端软件。
 
+### 定制功能
+
+- **根路径访问被拒绝**：访问根路径 `/` 时，返回 **403 Forbidden**，防止未授权访问。
+- **登录页访问**：必须通过 `/xxxxxxxxx自定义URL地址.html` 路径访问登录页面，增加了一层安全保护。
+
+## 快速安装
+
+使用以下命令一键安装（自动获取最新版本）：
+
+```bash
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -v
+```
+
+### 安装选项
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `-C cpu_type` | CPU 类型 (amd64, 386, arm64, 等) | 自动检测 |
+| `-O os` | 操作系统 (linux, darwin, freebsd, openbsd) | 自动检测 |
+| `-o output_dir` | 输出目录 | /opt |
+| `-t tag` | 版本标签（默认自动获取最新版本） | 自动获取 |
+| `-v` | 详细输出 | 关闭 |
+| `-r` | 重新安装 | - |
+| `-u` | 卸载 | - |
+
+### 安装示例
+
+```bash
+# 安装最新版本（自动获取 GitHub 最新 tag）
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -v
+
+# 安装指定版本
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -t v0.3.0
+
+# 指定安装目录
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -o /opt/adguardhome
+```
+
+### 版本同步
+
+安装脚本会自动从 GitHub API 获取最新发布的版本号，确保安装的版本与 GitHub Releases 保持一致。
+
 ## 与官方版本的区别
 
 新增 `login_path` 配置项，支持自定义登录页路径，隐藏默认登录入口。

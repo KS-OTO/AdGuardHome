@@ -26,8 +26,25 @@ error_exit() {
 #
 # TODO(e.burkov): 记录每个选项。
 usage() {
-	echo 'install.sh: 用法: [-c channel] [-C cpu_type] [-h] [-O os] [-o output_dir]' \
-		'[-r|-R] [-u|-U] [-v|-V]' 1>&2
+	echo 'install.sh: 用法: [-C cpu_type] [-h] [-O os] [-o output_dir]' \
+		'[-r|-R] [-u|-U] [-v|-V] [-t tag]' 1>&2
+	echo '' 1>&2
+	echo '选项:' 1>&2
+	echo '  -C cpu_type    CPU 类型 (amd64, 386, arm64, 等)' 1>&2
+	echo '  -O os          操作系统 (linux, darwin, freebsd, openbsd)' 1>&2
+	echo '  -o output_dir  输出目录 (默认: /opt)' 1>&2
+	echo '  -r             重新安装' 1>&2
+	echo '  -R             不重新安装' 1>&2
+	echo '  -u             卸载' 1>&2
+	echo '  -U             不卸载' 1>&2
+	echo '  -v             详细输出' 1>&2
+	echo '  -V             不详细输出' 1>&2
+	echo '  -t tag         版本标签 (默认: 自动获取最新版本)' 1>&2
+	echo '' 1>&2
+	echo '示例:' 1>&2
+	echo '  ./installcn.sh                           # 安装最新版本' 1>&2
+	echo '  ./installcn.sh -t v1.0.0                # 安装指定版本' 1>&2
+	echo '  ./installcn.sh -o /opt/adguardhome     # 指定安装目录' 1>&2
 
 	exit 2
 }
@@ -118,13 +135,10 @@ check_out_dir() {
 
 # 函数 parse_opts 解析选项列表并验证其组合。
 parse_opts() {
-	while getopts "C:c:hO:o:rRuUvV" opt "$@"; do
+	while getopts "C:hO:o:rRuUvVt:" opt "$@"; do
 		case "$opt" in
 		C)
 			cpu="$OPTARG"
-			;;
-		c)
-			channel="$OPTARG"
 			;;
 		h)
 			usage
@@ -153,6 +167,9 @@ parse_opts() {
 		v)
 			verbose='1'
 			;;
+		t)
+			tag="$OPTARG"
+			;;
 		*)
 			log "错误的选项 $OPTARG"
 
@@ -164,22 +181,6 @@ parse_opts() {
 	if [ "$uninstall" -eq '1' ] && [ "$reinstall" -eq '1' ]; then
 		error_exit '-r 和 -u 选项互斥'
 	fi
-}
-
-# 函数 set_channel 如果需要则设置 channel 并验证值。
-set_channel() {
-	# 验证。
-	case "$channel" in
-	'development' | 'edge' | 'beta' | 'release')
-		# 一切正常，继续。
-		;;
-	*)
-		error_exit "无效的 channel '$channel'，支持的值为 'development'、'edge'、'beta' 和 'release'"
-		;;
-	esac
-
-	# 记录。
-	log "channel: $channel"
 }
 
 # 函数 set_os 如果需要则设置 os 并验证值。
@@ -370,9 +371,31 @@ set_sudo_cmd() {
 	esac
 }
 
+# 函数 get_latest_tag 从 GitHub API 获取最新的 release tag。
+get_latest_tag() {
+	# GitHub API 端点获取最新 release
+	api_url="https://api.github.com/repos/KS-OTO/AdGuardHome/releases/latest"
+
+	log "正在从 GitHub 获取最新版本信息..."
+
+	# 使用下载函数获取 API 响应
+	api_response="$("$download_func" "$api_url" 2>/dev/null)"
+
+	# 从 JSON 中提取 tag_name 字段
+	latest_tag="$(echo "$api_response" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | head -1)"
+
+	if [ "$latest_tag" = '' ]; then
+		log "无法从 GitHub 获取最新版本，将使用 'latest'"
+		latest_tag='latest'
+	else
+		log "检测到最新版本: $latest_tag"
+	fi
+
+	echo "$latest_tag"
+}
+
 # 函数 configure 设置脚本的配置。
 configure() {
-	set_channel
 	set_os
 	set_cpu
 	fix_darwin
@@ -381,7 +404,13 @@ configure() {
 	check_out_dir
 
 	pkg_name="AdGuardHome_${os}_${cpu}.${pkg_ext}"
-	url="https://static.adtidy.org/adguardhome/${channel}/${pkg_name}"
+
+	# 如果未指定 tag，则从 GitHub 获取最新版本
+	if [ "$tag" = '' ]; then
+		tag="$(get_latest_tag)"
+	fi
+
+	url="https://gh-proxy.org/https://github.com/KS-OTO/AdGuardHome/releases/download/${tag}/${pkg_name}"
 	agh_dir="${out_dir}/AdGuardHome"
 	readonly pkg_name url agh_dir
 
@@ -412,7 +441,7 @@ is_root() {
 #
 # TODO(e.burkov): 尝试避免重新启动。
 rerun_with_root() {
-	script_url='https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh'
+	script_url='https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh'
 	readonly script_url
 
 	r='-R'
@@ -430,7 +459,12 @@ rerun_with_root() {
 		v='-v'
 	fi
 
-	readonly r u v
+	t=''
+	if [ "$tag" != '' ]; then
+		t="-t $tag"
+	fi
+
+	readonly r u v t
 
 	log '以 root 权限重新启动'
 
@@ -438,7 +472,7 @@ rerun_with_root() {
 	# 后者会打印一个 exit 命令供后续 shell 执行，以防止它获得空输入
 	# 并在这种情况下以零代码退出。
 	{ "$download_func" "$script_url" || echo 'exit 1'; } \
-		| $sudo_cmd sh -s -- -c "$channel" -C "$cpu" -O "$os" -o "$out_dir" "$r" "$u" "$v"
+		| $sudo_cmd sh -s -- -C "$cpu" -O "$os" -o "$out_dir" "$r" "$u" "$v" "$t"
 
 	# 退出脚本。由于前一个管道的代码非零，
 	# 由于 set -e，执行不会到达此点，以零退出。
@@ -561,7 +595,6 @@ install_service() {
 # 入口点
 
 # 设置配置变量的默认值。
-channel='release'
 reinstall='0'
 uninstall='0'
 verbose='0'
@@ -571,6 +604,7 @@ out_dir='/opt'
 pkg_ext='tar.gz'
 download_func='download_curl'
 sudo_cmd='sudo'
+tag=''
 
 parse_opts "$@"
 
