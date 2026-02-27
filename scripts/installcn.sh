@@ -544,6 +544,7 @@ handle_existing() {
 	fi
 
 	# 检查默认安装目录
+	actual_agh_dir="$agh_dir"
 	if ! [ -d "$agh_dir" ]; then
 		echo "检测结果：默认安装目录 $agh_dir 不存在"
 
@@ -553,7 +554,7 @@ handle_existing() {
 				actual_dir="$(grep 'WorkingDirectory=' /etc/systemd/system/AdGuardHome.service | cut -d'=' -f2)"
 				if [ "$actual_dir" != '' ] && [ "$actual_dir" != "$agh_dir" ]; then
 					echo "检测结果：从服务文件检测到实际安装目录: $actual_dir"
-					agh_dir="$actual_dir"
+					actual_agh_dir="$actual_dir"
 				fi
 			fi
 		else
@@ -561,7 +562,7 @@ handle_existing() {
 			for check_dir in /root/AdGuardHome /usr/local/AdGuardHome /home/*/AdGuardHome; do
 				if [ -d "$check_dir" ] && [ -f "$check_dir/AdGuardHome" ]; then
 					echo "检测结果：检测到 AdGuardHome 安装在: $check_dir"
-					agh_dir="$check_dir"
+					actual_agh_dir="$check_dir"
 					break
 				fi
 			done
@@ -569,7 +570,7 @@ handle_existing() {
 	fi
 
 	# 如果仍然没有找到安装目录，且不是卸载操作，则继续
-	if ! [ -d "$agh_dir" ]; then
+	if ! [ -d "$actual_agh_dir" ]; then
 		echo "检测结果：未检测到现有的 AdGuard Home 安装"
 
 		if [ "$uninstall" -eq '1' ]; then
@@ -581,9 +582,9 @@ handle_existing() {
 		return 0
 	fi
 
-	existing_adguard_home="$(ls -1 -A "$agh_dir")"
+	existing_adguard_home="$(ls -1 -A "$actual_agh_dir")"
 	if [ "$existing_adguard_home" != '' ]; then
-		echo "检测结果：检测到现有的 AdGuard Home 安装在 $agh_dir"
+		echo "检测结果：检测到现有的 AdGuard Home 安装在 $actual_agh_dir"
 
 		if [ "$reinstall" -ne '1' ] && [ "$uninstall" -ne '1' ]; then
 			error_exit \
@@ -598,13 +599,13 @@ handle_existing() {
 
 		echo '=== 开始卸载现有版本 ==='
 		# TODO(e.burkov): 在 v0.107.1 发布后删除 stop。
-		if (cd "$agh_dir" && ! ./AdGuardHome -s stop || ! ./AdGuardHome -s uninstall); then
+		if (cd "$actual_agh_dir" && ! ./AdGuardHome -s stop || ! ./AdGuardHome -s uninstall); then
 			# 它不会终止脚本，因为 AGH 可能只是
 			# 没有作为服务安装但出现在目录中。
-			log "无法从 $agh_dir 卸载 AdGuard Home"
+			log "无法从 $actual_agh_dir 卸载 AdGuard Home"
 		fi
 
-		rm -r "$agh_dir"
+		rm -r "$actual_agh_dir"
 
 		# 手动清理 systemd 服务文件（如果卸载失败导致残留）
 		if [ "$os" = 'linux' ]; then
