@@ -17,6 +17,11 @@ See also the [v0.107.73 GitHub milestone][ms-v0.107.73].
 
 NOTE: Add new changes BELOW THIS COMMENT.
 -->
+
+### Fixed
+
+- Incorrect logger behavior in case `-v` flag is added.
+
 <!--
 NOTE: Add new changes ABOVE THIS COMMENT.
 -->
