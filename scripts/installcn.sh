@@ -482,6 +482,10 @@ rerun_with_root() {
 # 函数 download 从 URL 下载文件并将其保存到
 # 指定的文件路径。
 download() {
+	echo '=== 开始下载新版本 ==='
+	echo "检测结果：目标版本 $tag"
+	echo "下一步：从 $url 下载包到 $pkg_name"
+
 	log "从 $url 下载包到 $pkg_name"
 
 	if ! "$download_func" "$url" "$pkg_name"; then
@@ -489,10 +493,15 @@ download() {
 	fi
 
 	log "成功下载 $pkg_name"
+	echo '=== 下载完成 ==='
 }
 
 # 函数 unpack 根据扩展名解压传递的存档。
 unpack() {
+	echo '=== 开始解压 ==='
+	echo "检测结果：包文件 $pkg_name"
+	echo "下一步：解压到 $out_dir"
+
 	log "从 $pkg_name 解压包到 $out_dir"
 
 	# shellcheck disable=SC2174
@@ -519,30 +528,75 @@ unpack() {
 	log "解压成功，内容: $unpacked_contents"
 
 	rm "$pkg_name"
+	echo '=== 解压完成 ==='
 }
 
 # 函数 handle_existing 检测现有的 AGH 安装并在需要时
 # 处理删除它。
 handle_existing() {
+	echo '=== 检测现有安装 ==='
+
+	# 检查是否有运行的 AdGuardHome 服务
+	running_service=0
+	if [ "$os" = 'linux' ] && systemctl is-active --quiet AdGuardHome 2>/dev/null; then
+		running_service=1
+		echo "检测结果：检测到运行的 AdGuardHome 服务"
+	fi
+
+	# 检查默认安装目录
 	if ! [ -d "$agh_dir" ]; then
-		log '无需卸载'
+		echo "检测结果：默认安装目录 $agh_dir 不存在"
+
+		# 如果有运行的服务，尝试从服务文件中找到实际安装目录
+		if [ "$running_service" -eq '1' ]; then
+			if [ -f '/etc/systemd/system/AdGuardHome.service' ]; then
+				actual_dir="$(grep 'WorkingDirectory=' /etc/systemd/system/AdGuardHome.service | cut -d'=' -f2)"
+				if [ "$actual_dir" != '' ] && [ "$actual_dir" != "$agh_dir" ]; then
+					echo "检测结果：从服务文件检测到实际安装目录: $actual_dir"
+					agh_dir="$actual_dir"
+				fi
+			fi
+		else
+			# 没有运行的服务，检查常见安装目录
+			for check_dir in /root/AdGuardHome /usr/local/AdGuardHome /home/*/AdGuardHome; do
+				if [ -d "$check_dir" ] && [ -f "$check_dir/AdGuardHome" ]; then
+					echo "检测结果：检测到 AdGuardHome 安装在: $check_dir"
+					agh_dir="$check_dir"
+					break
+				fi
+			done
+		fi
+	fi
+
+	# 如果仍然没有找到安装目录，且不是卸载操作，则继续
+	if ! [ -d "$agh_dir" ]; then
+		echo "检测结果：未检测到现有的 AdGuard Home 安装"
 
 		if [ "$uninstall" -eq '1' ]; then
+			echo "下一步：无需卸载，退出脚本"
 			exit 0
 		fi
 
+		echo "下一步：跳过卸载，直接进行新安装"
 		return 0
 	fi
 
 	existing_adguard_home="$(ls -1 -A "$agh_dir")"
 	if [ "$existing_adguard_home" != '' ]; then
-		log '检测到现有的 AdGuard Home 安装'
+		echo "检测结果：检测到现有的 AdGuard Home 安装在 $agh_dir"
 
 		if [ "$reinstall" -ne '1' ] && [ "$uninstall" -ne '1' ]; then
 			error_exit \
 				"要使用此脚本重新安装/卸载 AdGuard Home，请指定 '-r' 或 '-u' 标志之一"
 		fi
 
+		if [ "$uninstall" -eq '1' ]; then
+			echo "下一步：卸载 AdGuard Home"
+		else
+			echo "下一步：卸载现有版本后重新安装"
+		fi
+
+		echo '=== 开始卸载现有版本 ==='
 		# TODO(e.burkov): 在 v0.107.1 发布后删除 stop。
 		if (cd "$agh_dir" && ! ./AdGuardHome -s stop || ! ./AdGuardHome -s uninstall); then
 			# 它不会终止脚本，因为 AGH 可能只是
@@ -552,16 +606,35 @@ handle_existing() {
 
 		rm -r "$agh_dir"
 
+		# 手动清理 systemd 服务文件（如果卸载失败导致残留）
+		if [ "$os" = 'linux' ]; then
+			systemd_service_file='/etc/systemd/system/AdGuardHome.service'
+			if [ -f "$systemd_service_file" ]; then
+				log "检测到残留的 systemd 服务文件，正在删除..."
+				rm -f "$systemd_service_file"
+				systemctl daemon-reload 2>/dev/null || true
+				log "systemd 服务文件已删除"
+			fi
+		fi
+
 		log 'AdGuard Home 已成功卸载'
+		echo '=== 卸载完成 ==='
 	fi
 
 	if [ "$uninstall" -eq '1' ]; then
+		echo "下一步：卸载完成，退出脚本"
 		exit 0
 	fi
+
+	echo "下一步：准备下载并安装新版本到 $agh_dir"
 }
 
 # 函数 install_service 尝试将 AGH 安装为服务。
 install_service() {
+	echo '=== 开始安装服务 ==='
+	echo "检测结果：安装目录 $agh_dir"
+	echo "下一步：将 AdGuardHome 安装为系统服务"
+
 	# 至少在 FreeBSD 上需要以 root 身份安装服务。
 	use_sudo='0'
 	if [ "$os" = 'freebsd' ]; then
@@ -609,6 +682,12 @@ tag=''
 parse_opts "$@"
 
 echo '启动 AdGuard Home 安装脚本'
+echo '=== 初始化检测 ==='
+echo "检测结果：操作系统 $os"
+echo "检测结果：CPU 类型 $cpu"
+echo "检测结果：安装目录 $out_dir"
+echo "下一步：开始安装流程"
+echo ''
 
 configure
 check_required
@@ -626,7 +705,15 @@ unpack
 
 install_service
 
+echo '=== 安装完成 ==='
+echo "检测结果：AdGuardHome 已成功安装到 $agh_dir"
+echo "下一步：服务已自动启动，可以开始使用"
+echo ''
+
 printf '%s\n' \
 	'AdGuard Home 现已安装并运行' \
 	'您可以使用以下命令控制服务状态:' \
-	"$sudo_cmd ${agh_dir}/AdGuardHome -s start|stop|restart|status|install|uninstall"
+	"$sudo_cmd ${agh_dir}/AdGuardHome -s start|stop|restart|status|install|uninstall" \
+	'' \
+	'建议：安装完成后，请手动重启服务以确保配置生效：' \
+	"$sudo_cmd ${agh_dir}/AdGuardHome -s restart"

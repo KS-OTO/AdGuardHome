@@ -41,7 +41,41 @@ curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO
 curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -t v0.3.0
 
 # 指定安装目录
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -o /opt/adguardhome
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -o /opt
+
+# 重新安装（先卸载当前版本再安装最新版本）
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -r
+
+# 重新安装指定版本（先卸载当前版本再安装指定版本）
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -r -t v0.3.0
+
+# 卸载
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -u
+```
+
+### 安装ADGuard Home后的常用指令
+
+需在安装目录下执行，默认安装目录为 `/opt/AdGuardHome`。
+
+```bash
+# 运行安装 AdGuard Home 作为系统服务
+sudo ./AdGuardHome -s install
+
+# 卸载 AdGuard Home 服务
+sudo ./AdGuardHome -s uninstall
+
+# 开始服务
+sudo ./AdGuardHome -s start
+
+# 停止服务
+sudo ./AdGuardHome -s stop
+
+# 重启服务
+sudo ./AdGuardHome -s restart
+
+# 显示当前服务状态
+sudo ./AdGuardHome -s status
+
 ```
 
 ### 版本同步
