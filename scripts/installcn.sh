@@ -381,8 +381,8 @@ get_latest_tag() {
 	# 使用下载函数获取 API 响应
 	api_response="$("$download_func" "$api_url" 2>/dev/null)"
 
-	# 从 JSON 中提取 tag_name 字段
-	latest_tag="$(echo "$api_response" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | head -1)"
+	# 从 JSON 中提取 tag_name 字段，并去除空白
+	latest_tag="$(echo "$api_response" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | xargs | head -1)"
 
 	if [ "$latest_tag" = '' ]; then
 		log "无法从 GitHub 获取最新版本，将使用 'latest'"
@@ -409,6 +409,9 @@ configure() {
 	if [ "$tag" = '' ]; then
 		tag="$(get_latest_tag)"
 	fi
+
+	# 去除 tag 两端的空白字符
+	tag="$(echo "$tag" | xargs)"
 
 	url="https://gh-proxy.org/https://github.com/KS-OTO/AdGuardHome/releases/download/${tag}/${pkg_name}"
 	agh_dir="${out_dir}/AdGuardHome"
@@ -461,6 +464,7 @@ rerun_with_root() {
 
 	t=''
 	if [ "$tag" != '' ]; then
+		tag="$(echo "$tag" | xargs)"
 		t="-t $tag"
 	fi
 
@@ -485,6 +489,7 @@ download() {
 	echo '=== 开始下载新版本 ==='
 	echo "检测结果：目标版本 $tag"
 	echo "下一步：从 GitHub 下载版本 $tag"
+	echo "下载链接：$url"
 
 	# 使用 curl 下载并显示进度
 	if [ "$download_func" = 'download_curl' ]; then
