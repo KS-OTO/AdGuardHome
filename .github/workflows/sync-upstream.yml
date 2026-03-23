@@ -2,8 +2,8 @@ name: Sync upstream
 
 on:
   schedule:
-    # 每天 UTC 时间 2:00 自动同步
-    - cron: '0 2 * * *'
+    # 每周一 UTC 时间 4:00 自动同步
+    - cron: '0 4 * * 1'
   workflow_dispatch:
 
 jobs:
