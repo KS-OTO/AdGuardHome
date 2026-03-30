@@ -10,13 +10,14 @@ AdGuard Home 是一个全网级别的广告和追踪器拦截 DNS 服务器。�
 
 - **根路径访问被拒绝**：访问根路径 `/` 时，返回 **403 Forbidden**，防止未授权访问。
 - **登录页访问**：必须通过 `/xxxxxxxxx自定义URL地址.html` 路径访问登录页面，增加了一层安全保护。
+- **一键安装脚本**：提供为大陆地区网络加速、以及个别VPS厂商优化的一键安装脚本，支持自动获取最新版本。
 
 ## 快速安装
 
 使用以下命令一键安装（自动获取最新版本）：
 
 ```bash
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -v
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/install-cn.sh | sh -s -- -v
 ```
 
 ### 安装选项
@@ -35,22 +36,22 @@ curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO
 
 ```bash
 # 安装最新版本（自动获取 GitHub 最新 tag）
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -v
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/install-cn.sh | sh -s -- -v
 
 # 安装指定版本
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -t v0.3.0
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/install-cn.sh | sh -s -- -t v0.3.0
 
 # 指定安装目录
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -o /opt
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/install-cn.sh | sh -s -- -o /opt
 
 # 重新安装（先卸载当前版本再安装最新版本）
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -r
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/install-cn.sh | sh -s -- -r
 
 # 重新安装指定版本（先卸载当前版本再安装指定版本）
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -r -t v0.3.0
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/install-cn.sh | sh -s -- -r -t v0.3.0
 
 # 卸载
-curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/installcn.sh | sh -s -- -u
+curl -s -S -L https://gh.felicity.ac.cn/https://raw.githubusercontent.com/KS-OTO/AdGuardHome/master/scripts/install-cn.sh | sh -s -- -u
 ```
 
 ### 安装ADGuard Home后的常用指令
@@ -111,7 +112,7 @@ http:
 
 ## 上游同步
 
-本仓库通过 GitHub Actions 每天自动同步上游 [AdguardTeam/AdGuardHome](https://github.com/AdguardTeam/AdGuardHome) 的更新。如有合并冲突会自动创建 PR 提醒手动处理。
+本仓库通过 GitHub Actions 每周自动同步上游 [AdguardTeam/AdGuardHome](https://github.com/AdguardTeam/AdGuardHome) 的更新。如有合并冲突会自动创建 PR 提醒手动处理。
 
 ## 更多信息
 
