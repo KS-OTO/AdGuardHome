@@ -6,8 +6,8 @@ on:
       - 'v*'
 
 env:
-  GO_VERSION: '1.25.7'
-  NODE_VERSION: '20'
+  GO_VERSION: '1.26.8'
+  NODE_VERSION: '24'
 
 jobs:
   release:
@@ -31,96 +31,21 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install frontend dependencies
-        run: npm --prefix client ci --quiet --no-progress
-
-      - name: Build frontend
-        run: npm --prefix client run build-prod
-
-      - name: Build and package binaries
+      # Reuse the upstream build pipeline (scripts/make/build-release.sh):
+      # it builds the client_v2 frontend, injects the version/channel into
+      # the binaries, and packages all supported platforms into dist/.
+      - name: Build release
         run: |
-          VERSION="${GITHUB_REF_NAME}"
+          make \
+            SIGN=0 \
+            VERBOSE=1 \
+            VERSION="${GITHUB_REF_NAME}" \
+            CHANNEL='release' \
+            build-release \
+            ;
 
-          # os;arch;arm;mips
-          platforms=(
-            "darwin;amd64;;"
-            "darwin;arm64;;"
-            "freebsd;386;;"
-            "freebsd;amd64;;"
-            "freebsd;arm;5;"
-            "freebsd;arm;6;"
-            "freebsd;arm;7;"
-            "freebsd;arm64;;"
-            "linux;386;;"
-            "linux;amd64;;"
-            "linux;arm;5;"
-            "linux;arm;6;"
-            "linux;arm;7;"
-            "linux;arm64;;"
-            "linux;mips;;softfloat"
-            "linux;mips64;;softfloat"
-            "linux;mips64le;;softfloat"
-            "linux;mipsle;;softfloat"
-            "linux;ppc64le;;"
-            "linux;riscv64;;"
-            "openbsd;amd64;;"
-            "openbsd;arm64;;"
-            "windows;386;;"
-            "windows;amd64;;"
-            "windows;arm64;;"
-          )
-
-          mkdir -p dist
-
-          for entry in "${platforms[@]}"; do
-            IFS=';' read -r os arch arm mips <<< "$entry"
-
-            # Determine archive and directory names
-            if [ -n "$arm" ]; then
-              dir_name="AdGuardHome_${os}_${arch}_${arm}"
-              ar_name="AdGuardHome_${os}_${arch}v${arm}"
-            elif [ -n "$mips" ]; then
-              dir_name="AdGuardHome_${os}_${arch}_${mips}"
-              ar_name="${dir_name}"
-            else
-              dir_name="AdGuardHome_${os}_${arch}"
-              ar_name="${dir_name}"
-            fi
-
-            build_dir="dist/${dir_name}/AdGuardHome"
-            mkdir -p "$build_dir"
-
-            # Binary output path
-            output="${build_dir}/AdGuardHome"
-            if [ "$os" = "windows" ]; then
-              output="${output}.exe"
-            fi
-
-            echo "Building ${os}/${arch} arm=${arm} mips=${mips}..."
-            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOARM="${arm}" GOMIPS="${mips}" \
-              go build -ldflags "-s -w" -o "$output" .
-
-            # Copy docs into the package
-            cp CHANGELOG.md LICENSE.txt README.md "$build_dir/"
-
-            # Create archive
-            case "$os" in
-              darwin|windows)
-                (cd "dist/${dir_name}" && zip -9 -q -r "../../dist/${ar_name}.zip" ./AdGuardHome)
-                ;;
-              *)
-                tar -C "dist/${dir_name}" -czf "dist/${ar_name}.tar.gz" ./AdGuardHome
-                ;;
-            esac
-
-            # Clean up build directory
-            rm -rf "dist/${dir_name}"
-          done
-
-          # Pack frontend
-          tar -czf dist/AdGuardHome_frontend.tar.gz ./build
-
-          # Generate checksums
+      - name: Generate checksums
+        run: |
           (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
 
       - name: Create Release
