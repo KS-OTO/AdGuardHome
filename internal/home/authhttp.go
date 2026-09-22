@@ -300,39 +300,45 @@ func (web *webAPI) registerAuthHandlers() {
 	web.httpReg.Register(http.MethodGet, "/control/logout", web.handleLogout)
 }
 
+// isLoginPath returns true if p is a path to the login page or its assets,
+// considering the custom login path configuration.
+func isLoginPath(p, customLogin string) (ok bool) {
+	if customLogin == "" {
+		isLogin, err := path.Match("/login.*", p)
+		if err != nil {
+			// The only error that is returned from path.Match is
+			// [path.ErrBadPattern].  This is a programmer error.
+			panic(fmt.Errorf("bad login pattern: %w", err))
+		}
+
+		return isLogin
+	}
+
+	// When a custom login path is configured, only /login.html is hidden;
+	// the login page's JS and CSS assets (e.g. /login.*.js, /login.*.css)
+	// must remain public so the page can render.
+	isLoginJS, err := path.Match("/login.*.js", p)
+	if err != nil {
+		panic(fmt.Errorf("bad login js pattern: %w", err))
+	}
+
+	isLoginCSS, err := path.Match("/login.*.css", p)
+	if err != nil {
+		panic(fmt.Errorf("bad login css pattern: %w", err))
+	}
+
+	return isLoginJS || isLoginCSS
+}
+
 // isPublicResource returns true if p is a path to a public resource.
 // customLogin is the custom login page path from configuration; when non-empty,
-// the original /login.* paths are no longer considered public.
+// the original /login.html page is no longer considered public.
 func isPublicResource(p, customLogin string) (ok bool) {
 	isAsset, err := path.Match("/assets/*", p)
 	if err != nil {
 		// The only error that is returned from path.Match is
 		// [path.ErrBadPattern].  This is a programmer error.
 		panic(fmt.Errorf("bad asset pattern: %w", err))
-	}
-
-	// When a custom login path is configured, only /login.html is hidden;
-	// the login page's JS and CSS assets (e.g. /login.*.js, /login.*.css)
-	// must remain public so the page can render.
-	var isLogin bool
-	if customLogin == "" {
-		isLogin, err = path.Match("/login.*", p)
-		if err != nil {
-			// Same as above.
-			panic(fmt.Errorf("bad login pattern: %w", err))
-		}
-	} else {
-		isLoginJS, errJS := path.Match("/login.*.js", p)
-		if errJS != nil {
-			panic(fmt.Errorf("bad login js pattern: %w", errJS))
-		}
-
-		isLoginCSS, errCSS := path.Match("/login.*.css", p)
-		if errCSS != nil {
-			panic(fmt.Errorf("bad login css pattern: %w", errCSS))
-		}
-
-		isLogin = isLoginJS || isLoginCSS
 	}
 
 	isForgotPassword, err := path.Match("/forgot_password.*", p)
@@ -351,7 +357,7 @@ func isPublicResource(p, customLogin string) (ok bool) {
 		"/install.html",
 	}
 
-	return isAsset || isLogin || isForgotPassword || slices.Contains(paths, p)
+	return isAsset || isLoginPath(p, customLogin) || isForgotPassword || slices.Contains(paths, p)
 }
 
 // isDoHRoute returns true if r is a request to a DoH route.  r must not be nil.
