@@ -33,7 +33,8 @@ jobs:
 
       # Reuse the upstream build pipeline (scripts/make/build-release.sh):
       # it builds the client_v2 frontend, injects the version/channel into
-      # the binaries, and packages all supported platforms into dist/.
+      # the binaries.  pack-release then archives all platforms into dist/
+      # and generates checksums.txt and version.json.
       - name: Build release
         run: |
           make \
@@ -42,11 +43,8 @@ jobs:
             VERSION="${GITHUB_REF_NAME}" \
             CHANNEL='release' \
             build-release \
+            pack-release \
             ;
-
-      - name: Generate checksums
-        run: |
-          (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -56,3 +54,4 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/checksums.txt
+            dist/version.json
