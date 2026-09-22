@@ -35,9 +35,13 @@ jobs:
       # it builds the client_v2 frontend, injects the version/channel into
       # the binaries.  pack-release then archives all platforms into dist/
       # and generates checksums.txt and version.json.
+      #
+      # NOTE: pack-release.sh uses `set -o pipefail`, which /bin/sh (dash)
+      # on the runner does not support, so run make with bash.
       - name: Build release
         run: |
           make \
+            SHELL=/bin/bash \
             SIGN=0 \
             VERBOSE=1 \
             VERSION="${GITHUB_REF_NAME}" \
