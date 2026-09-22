@@ -18,7 +18,6 @@ import (
 	"github.com/AdguardTeam/AdGuardHome/internal/aghuser"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/httphdr"
-	"github.com/AdguardTeam/golibs/log"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/netutil/httputil"
@@ -82,18 +81,27 @@ func realIP(r *http.Request) (ip netip.Addr, err error) {
 }
 
 // writeErrorWithIP is like [aghhttp.Error], but includes the remote IP address
-// when it writes to the log.
-func writeErrorWithIP(
+// when it writes to the log.  r, w and err must not be nil.
+func (web *webAPI) writeErrorWithIP(
+	ctx context.Context,
+	err error,
 	r *http.Request,
 	w http.ResponseWriter,
 	code int,
 	remoteIP string,
-	format string,
-	args ...any,
 ) {
-	text := fmt.Sprintf(format, args...)
-	log.Error("%s %s %s: from ip %s: %s", r.Method, r.Host, r.URL, remoteIP, text)
-	http.Error(w, text, code)
+	web.logger.ErrorContext(
+		ctx,
+		"http error",
+		"host", r.Host,
+		"method", r.Method,
+		"url", r.URL,
+		"status", code,
+		"ip", remoteIP,
+		slogutil.KeyError, err,
+	)
+
+	http.Error(w, err.Error(), code)
 }
 
 // handleLogin is the handler for the POST /control/login HTTP API.
@@ -114,13 +122,13 @@ func (web *webAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	//
 	// See https://github.com/AdguardTeam/AdGuardHome/issues/2799.
 	if remoteIPStr, err = netutil.SplitHost(r.RemoteAddr); err != nil {
-		writeErrorWithIP(
+		web.writeErrorWithIP(
+			ctx,
+			fmt.Errorf("auth: getting remote address: %w", err),
 			r,
 			w,
 			http.StatusBadRequest,
 			r.RemoteAddr,
-			"auth: getting remote address: %s",
-			err,
 		)
 
 		return
@@ -129,13 +137,13 @@ func (web *webAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if rateLimiter := web.auth.rateLimiter; rateLimiter != nil {
 		if left := rateLimiter.check(remoteIPStr); left > 0 {
 			w.Header().Set(httphdr.RetryAfter, strconv.Itoa(int(left.Seconds())))
-			writeErrorWithIP(
+			web.writeErrorWithIP(
+				ctx,
+				fmt.Errorf("auth: blocked for %s", left),
 				r,
 				w,
 				http.StatusTooManyRequests,
 				remoteIPStr,
-				"auth: blocked for %s",
-				left,
 			)
 
 			return
@@ -154,13 +162,13 @@ func (web *webAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	remoteIP, err := netip.ParseAddr(remoteIPStr)
 	if err != nil {
-		writeErrorWithIP(
+		web.writeErrorWithIP(
+			ctx,
+			fmt.Errorf("auth: parsing remote address: %w", err),
 			r,
 			w,
 			http.StatusInternalServerError,
 			r.RemoteAddr,
-			"auth: parsing remote address: %s",
-			err,
 		)
 
 		return
@@ -173,7 +181,7 @@ func (web *webAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	cookie, err := newCookie(ctx, web.auth, req, remoteIPStr)
 	if err != nil {
-		writeErrorWithIP(r, w, http.StatusForbidden, logIP, "%s", err)
+		web.writeErrorWithIP(ctx, err, r, w, http.StatusForbidden, logIP)
 
 		return
 	}
@@ -292,9 +300,39 @@ func (web *webAPI) registerAuthHandlers() {
 	web.httpReg.Register(http.MethodGet, "/control/logout", web.handleLogout)
 }
 
+// isLoginPath returns true if p is a path to the login page or its assets,
+// considering the custom login path configuration.
+func isLoginPath(p, customLogin string) (ok bool) {
+	if customLogin == "" {
+		isLogin, err := path.Match("/login.*", p)
+		if err != nil {
+			// The only error that is returned from path.Match is
+			// [path.ErrBadPattern].  This is a programmer error.
+			panic(fmt.Errorf("bad login pattern: %w", err))
+		}
+
+		return isLogin
+	}
+
+	// When a custom login path is configured, only /login.html is hidden;
+	// the login page's JS and CSS assets (e.g. /login.*.js, /login.*.css)
+	// must remain public so the page can render.
+	isLoginJS, err := path.Match("/login.*.js", p)
+	if err != nil {
+		panic(fmt.Errorf("bad login js pattern: %w", err))
+	}
+
+	isLoginCSS, err := path.Match("/login.*.css", p)
+	if err != nil {
+		panic(fmt.Errorf("bad login css pattern: %w", err))
+	}
+
+	return isLoginJS || isLoginCSS
+}
+
 // isPublicResource returns true if p is a path to a public resource.
 // customLogin is the custom login page path from configuration; when non-empty,
-// the original /login.* paths are no longer considered public.
+// the original /login.html page is no longer considered public.
 func isPublicResource(p, customLogin string) (ok bool) {
 	isAsset, err := path.Match("/assets/*", p)
 	if err != nil {
@@ -303,37 +341,13 @@ func isPublicResource(p, customLogin string) (ok bool) {
 		panic(fmt.Errorf("bad asset pattern: %w", err))
 	}
 
-	// When a custom login path is configured, only /login.html is hidden;
-	// the login page's JS and CSS assets (e.g. /login.*.js, /login.*.css)
-	// must remain public so the page can render.
-	var isLogin bool
-	if customLogin == "" {
-		isLogin, err = path.Match("/login.*", p)
-		if err != nil {
-			// Same as above.
-			panic(fmt.Errorf("bad login pattern: %w", err))
-		}
-	} else {
-		isLoginJS, errJS := path.Match("/login.*.js", p)
-		if errJS != nil {
-			panic(fmt.Errorf("bad login js pattern: %w", errJS))
-		}
-
-		isLoginCSS, errCSS := path.Match("/login.*.css", p)
-		if errCSS != nil {
-			panic(fmt.Errorf("bad login css pattern: %w", errCSS))
-		}
-
-		isLogin = isLoginJS || isLoginCSS
-	}
-
-	// TODO(s.chzhen):  Implement a more strict version.
-	if strings.HasPrefix(p, "/dns-query/") {
-		return true
+	isForgotPassword, err := path.Match("/forgot_password.*", p)
+	if err != nil {
+		// Same as above.
+		panic(fmt.Errorf("bad forgot password pattern: %w", err))
 	}
 
 	paths := []string{
-		"/dns-query",
 		"/control/login",
 		"/apple/doh.mobileconfig",
 		"/apple/dot.mobileconfig",
@@ -343,7 +357,17 @@ func isPublicResource(p, customLogin string) (ok bool) {
 		"/install.html",
 	}
 
-	return isAsset || isLogin || slices.Contains(paths, p)
+	return isAsset || isLoginPath(p, customLogin) || isForgotPassword || slices.Contains(paths, p)
+}
+
+// isDoHRoute returns true if r is a request to a DoH route.  r must not be nil.
+func (mw *authMiddlewareDefault) isDoHRoute(r *http.Request) (ok bool) {
+	_, pattern := mw.mux.Handler(r)
+	if pattern == "" {
+		return false
+	}
+
+	return slices.Contains(mw.doHRoutes, pattern)
 }
 
 const (
@@ -359,6 +383,9 @@ type authMiddlewareDefaultConfig struct {
 	//
 	// TODO(e.burkov):  Require a logger in request's context instead.
 	logger *slog.Logger
+
+	// mux is the server's multiplexer.  It must not be nil.
+	mux *http.ServeMux
 
 	// rateLimiter manages the rate limiting for login attempts.
 	rateLimiter loginRateLimiter
@@ -379,6 +406,9 @@ type authMiddlewareDefaultConfig struct {
 	// /login.html is hidden and only this custom path can access the login
 	// page.
 	loginPath string
+
+	// doHRoutes is a list of DoH routes for public access.
+	doHRoutes []string
 }
 
 // authMiddlewareDefault is the default authentication middleware.  It searches
@@ -386,11 +416,13 @@ type authMiddlewareDefaultConfig struct {
 // passes it with the context.
 type authMiddlewareDefault struct {
 	logger         *slog.Logger
+	mux            *http.ServeMux
 	rateLimiter    loginRateLimiter
 	trustedProxies netutil.SubnetSet
 	sessions       aghuser.SessionStorage
 	users          aghuser.DB
 	loginPath      string
+	doHRoutes      []string
 }
 
 // newAuthMiddlewareDefault returns the new properly initialized
@@ -398,11 +430,13 @@ type authMiddlewareDefault struct {
 func newAuthMiddlewareDefault(c *authMiddlewareDefaultConfig) (mw *authMiddlewareDefault) {
 	return &authMiddlewareDefault{
 		logger:         c.logger,
+		mux:            c.mux,
 		rateLimiter:    c.rateLimiter,
 		trustedProxies: c.trustedProxies,
 		sessions:       c.sessions,
 		users:          c.users,
 		loginPath:      c.loginPath,
+		doHRoutes:      c.doHRoutes,
 	}
 }
 
@@ -454,7 +488,7 @@ func (mw *authMiddlewareDefault) handleAuthenticatedUser(
 		return false
 	}
 
-	isLoginPage := path == "/login.html"
+	isLoginPage := path == "/login.html" || path == "/forgot_password.html"
 	if mw.loginPath != "" {
 		isLoginPage = isLoginPage || path == "/"+mw.loginPath
 	}
@@ -515,7 +549,7 @@ func (mw *authMiddlewareDefault) handlePublicAccess(
 		return true
 	}
 
-	if isPublicResource(path, mw.loginPath) {
+	if isPublicResource(path, mw.loginPath) || mw.isDoHRoute(r) {
 		h.ServeHTTP(w, r)
 
 		return true

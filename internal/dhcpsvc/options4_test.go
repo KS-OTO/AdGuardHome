@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket/layers"
 )
 
 // newOptHostname creates a DHCP hostname (12) option.
@@ -39,4 +39,11 @@ func newOptServerID(tb testing.TB, serverIP netip.Addr) (opt layers.DHCPOption) 
 	tb.Helper()
 
 	return layers.NewDHCPOption(layers.DHCPOptServerID, serverIP.AsSlice())
+}
+
+// newOptRequestIP creates a DHCP request IP (50) option.
+func newOptRequestIP(tb testing.TB, reqIP netip.Addr) layers.DHCPOption {
+	tb.Helper()
+
+	return layers.NewDHCPOption(layers.DHCPOptRequestIP, reqIP.AsSlice())
 }

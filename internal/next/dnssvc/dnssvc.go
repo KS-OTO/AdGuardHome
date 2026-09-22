@@ -43,6 +43,11 @@ type Service struct {
 	// The fields below have been used to create proxy and are saved to return
 	// them in [Service.Config].
 
+	// initialAddrs is the list of addresses that the service was configured to
+	// listen on.  It may have a zero port, in which case the real port will be
+	// set in [Service.Start].
+	initialAddrs []netip.AddrPort
+
 	bootstraps          []string
 	bootstrapResolvers  []*upstream.UpstreamResolver
 	upstreams           []string
@@ -77,8 +82,10 @@ func New(c *Config) (svc *Service, err error) {
 			CacheSizeBytes: c.CacheSize,
 			CacheEnabled:   c.CacheEnabled,
 			RefuseAny:      c.RefuseAny,
+			DNSSECEnabled:  c.DNSSECEnabled,
 			UseDNS64:       c.UseDNS64,
 		},
+		initialAddrs:        c.Addresses,
 		bootstraps:          c.BootstrapServers,
 		upstreams:           c.UpstreamServers,
 		upstreamTimeout:     c.UpstreamTimeout,
@@ -109,6 +116,7 @@ func New(c *Config) (svc *Service, err error) {
 		RequestHandler: rlMw.Wrap(proxy.DefaultHandler{}),
 		DNS64Prefs:     svc.proxyConf.DNS64Prefs,
 		CacheEnabled:   svc.proxyConf.CacheEnabled,
+		DNSSECEnabled:  svc.proxyConf.DNSSECEnabled,
 		RefuseAny:      svc.proxyConf.RefuseAny,
 		UseDNS64:       svc.proxyConf.UseDNS64,
 	})
@@ -255,19 +263,12 @@ func (svc *Service) Shutdown(ctx context.Context) (err error) {
 func (svc *Service) Config() (c *Config) {
 	// TODO(a.garipov): Do we need to get the TCP addresses separately?
 
-	var addrs []netip.AddrPort
+	addrs := svc.initialAddrs
 	if svc.running.Load() {
 		udpAddrs := svc.proxy.Addrs(proxy.ProtoUDP)
 		addrs = make([]netip.AddrPort, len(udpAddrs))
 		for i, a := range udpAddrs {
 			addrs[i] = a.(*net.UDPAddr).AddrPort()
-		}
-	} else {
-		conf := svc.proxy.Config
-		udpAddrs := conf.UDPListenAddr
-		addrs = make([]netip.AddrPort, len(udpAddrs))
-		for i, a := range udpAddrs {
-			addrs[i] = a.AddrPort()
 		}
 	}
 

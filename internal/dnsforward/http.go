@@ -342,8 +342,8 @@ func (req *jsonDNSConfig) checkBootstrap() (err error) {
 	defer func() { err = errors.Annotate(err, "checking bootstrap %s: %w", b) }()
 
 	for _, b = range *req.Bootstraps {
-		if b == "" {
-			return errors.Error("empty")
+		if aghnet.IsCommentOrEmpty(b) {
+			continue
 		}
 
 		var resolver *upstream.UpstreamResolver
@@ -391,7 +391,8 @@ func (req *jsonDNSConfig) checkPrivateRDNS(
 		privateNets,
 		&upstream.Options{
 			Logger: slogutil.NewDiscardLogger(),
-		})
+		},
+	)
 	err = errors.WithDeferred(err, uc.Close())
 	if err != nil {
 		return fmt.Errorf("private upstream servers: %w", err)
@@ -729,8 +730,6 @@ func (s *Server) handleTestUpstreamDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.BootstrapDNS = stringutil.FilterOut(req.BootstrapDNS, aghnet.IsCommentOrEmpty)
-
 	opts := &upstream.Options{
 		Logger:     aghslog.NewForUpstream(s.baseLogger, aghslog.UpstreamTypeTest),
 		Timeout:    s.conf.UpstreamTimeout,
@@ -819,42 +818,7 @@ func (s *Server) handleSetProtection(w http.ResponseWriter, r *http.Request) {
 	aghhttp.OK(ctx, l, w)
 }
 
-// handleDoH is the DNS-over-HTTPs handler.
-//
-// Control flow:
-//
-//	HTTP server
-//	-> dnsforward.handleDoH
-//	-> dnsforward.ServeHTTP
-//	-> proxy.ServeHTTP
-//	-> proxy.handleDNSRequest
-//	-> dnsforward.ServeDNS
-func (s *Server) handleDoH(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	l := s.logger
-
-	if !s.conf.TLSAllowUnencryptedDoH && r.TLS == nil {
-		aghhttp.ErrorAndLog(ctx, l, r, w, http.StatusNotFound, "Not Found")
-
-		return
-	}
-
-	if !s.IsRunning() {
-		aghhttp.ErrorAndLog(
-			ctx,
-			l,
-			r,
-			w,
-			http.StatusInternalServerError,
-			"dns server is not running",
-		)
-
-		return
-	}
-
-	s.ServeHTTP(w, r)
-}
-
+// registerHandlers registers web HTTP handlers.
 func (s *Server) registerHandlers() {
 	if webRegistered || s.conf.HTTPReg == nil {
 		return
@@ -869,16 +833,6 @@ func (s *Server) registerHandlers() {
 	s.conf.HTTPReg.Register(http.MethodPost, "/control/access/set", s.handleAccessSet)
 
 	s.conf.HTTPReg.Register(http.MethodPost, "/control/cache_clear", s.handleCacheClear)
-
-	// Register both versions, with and without the trailing slash, to
-	// prevent a 301 Moved Permanently redirect when clients request the
-	// path without the trailing slash.  Those redirects break some clients.
-	//
-	// See go doc net/http.ServeMux.
-	//
-	// See also https://github.com/AdguardTeam/AdGuardHome/issues/2628.
-	s.conf.HTTPReg.Register("", "/dns-query", s.handleDoH)
-	s.conf.HTTPReg.Register("", "/dns-query/", s.handleDoH)
 
 	webRegistered = true
 }

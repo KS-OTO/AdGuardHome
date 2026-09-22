@@ -11,6 +11,7 @@ import (
 
 	"github.com/AdguardTeam/AdGuardHome/internal/aghhttp"
 	"github.com/AdguardTeam/AdGuardHome/internal/aghnet"
+	"github.com/AdguardTeam/AdGuardHome/internal/aghtls"
 	"github.com/AdguardTeam/AdGuardHome/internal/dnsforward"
 	"github.com/AdguardTeam/AdGuardHome/internal/version"
 	"github.com/AdguardTeam/golibs/httphdr"
@@ -68,8 +69,8 @@ func appendDNSAddrsWithIfaces(dst []string, src []netip.Addr) (res []string, err
 
 // collectDNSAddresses returns the list of DNS addresses the server is listening
 // on, including the addresses on all interfaces in cases of unspecified IPs.
-// tlsMgr must not be nil.
-func collectDNSAddresses(tlsMgr *tlsManager) (addrs []string, err error) {
+// extTLSConf must not be nil.
+func collectDNSAddresses(extTLSConf *aghtls.ExtendedTLSConfig) (addrs []string, err error) {
 	if hosts := config.DNS.BindHosts; len(hosts) == 0 {
 		addrs = appendDNSAddrs(addrs, netutil.IPv4Localhost())
 	} else {
@@ -79,7 +80,7 @@ func collectDNSAddresses(tlsMgr *tlsManager) (addrs []string, err error) {
 		}
 	}
 
-	de := getDNSEncryption(tlsMgr)
+	de := getDNSEncryption(extTLSConf)
 	if de.https != "" {
 		addrs = append(addrs, de.https)
 	}
@@ -121,7 +122,9 @@ func (web *webAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	l := web.logger
 
-	dnsAddrs, err := collectDNSAddresses(web.tlsManager)
+	extTLSConfig := web.tlsManager.ExtendedTLSConfig()
+
+	dnsAddrs, err := collectDNSAddresses(extTLSConfig)
 	if err != nil {
 		// Don't add a lot of formatting, since the error is already
 		// wrapped by collectDNSAddresses.
@@ -179,6 +182,10 @@ func (web *webAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (web *webAPI) registerControlHandlers() {
 	mux := web.conf.mux
 
+	web.httpReg.Register(http.MethodGet, "/control/tls/status", web.handleTLSStatus)
+	web.httpReg.Register(http.MethodPost, "/control/tls/configure", web.handleTLSConfigure)
+	web.httpReg.Register(http.MethodPost, "/control/tls/validate", web.handleTLSValidate)
+
 	mux.Handle(
 		"/control/version.json",
 		web.postInstallHandler(http.HandlerFunc(web.handleVersionJSON)),
@@ -199,14 +206,18 @@ func (web *webAPI) registerControlHandlers() {
 	web.httpReg.Register(http.MethodGet, "/control/profile", web.handleGetProfile)
 	web.httpReg.Register(http.MethodPut, "/control/profile/update", web.handlePutProfile)
 
+	mobileConfHandler := newMobileConfigHandler(&mobileConfigHandlerConfig{
+		logger: web.baseLogger,
+	})
+
 	// No authentication is required for DoH/DoT configuration endpoints.
 	mux.Handle(
 		"/apple/doh.mobileconfig",
-		web.postInstallHandler(http.HandlerFunc(handleMobileConfigDoH)),
+		web.postInstallHandler(http.HandlerFunc(mobileConfHandler.handleMobileConfigDoH)),
 	)
 	mux.Handle(
 		"/apple/dot.mobileconfig",
-		web.postInstallHandler(http.HandlerFunc(handleMobileConfigDoT)),
+		web.postInstallHandler(http.HandlerFunc(mobileConfHandler.handleMobileConfigDoT)),
 	)
 
 	web.registerAuthHandlers()
@@ -237,20 +248,9 @@ func (mw *webMw) set(web *webAPI) {
 //
 // TODO(s.chzhen):  Implement [httputil.Middleware].
 func (mw *webMw) wrap(method string, h http.HandlerFunc) (wrapped http.Handler) {
-	f := func(w http.ResponseWriter, r *http.Request) {
-		var handler http.Handler
-		if method == "" {
-			// The "/dns-query" handler doesn't require authentication or gzip,
-			// and it isn't restricted to a single HTTP method.
-			handler = mw.postInstallMw(h)
-		} else {
-			handler = mw.ensureMw(method, h)
-		}
-
-		handler.ServeHTTP(w, r)
-	}
-
-	return http.HandlerFunc(f)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mw.ensureMw(method, h).ServeHTTP(w, r)
+	})
 }
 
 // ensure returns a wrapped handler that verifies the request method.  It also

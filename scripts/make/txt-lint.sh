@@ -3,7 +3,10 @@
 # This comment is used to simplify checking local copies of the script.  Bump
 # this number every time a significant change is made to this script.
 #
-# AdGuard-Project-Version: 12
+# AdGuard-Project-Version: 14
+
+# Don't use -f, because we use globs in this script.
+set -e -o 'pipefail' -u
 
 verbose="${VERBOSE:-0}"
 readonly verbose
@@ -11,16 +14,6 @@ readonly verbose
 if [ "$verbose" -gt '0' ]; then
 	set -x
 fi
-
-# Set $EXIT_ON_ERROR to zero to see all errors.
-if [ "${EXIT_ON_ERROR:-1}" -eq '0' ]; then
-	set +e
-else
-	set -e
-fi
-
-# We don't need glob expansions and we want to see errors about unset variables.
-set -f -u
 
 # Source the common helpers, including not_found.
 . ./scripts/make/helper.sh
@@ -38,11 +31,13 @@ trailing_newlines() (
 		'!' '(' \
 		-name '*.db' \
 		-o -name '*.exe' \
+		-o -name '*.ico' \
 		-o -name '*.out' \
 		-o -name '*.png' \
 		-o -name '*.svg' \
 		-o -name '*.tar.gz' \
 		-o -name '*.test' \
+		-o -name '*.woff2' \
 		-o -name '*.zip' \
 		-o -name 'AdGuardHome' \
 		-o -name 'adguard-home' \
@@ -64,18 +59,20 @@ trailing_whitespace() {
 		'!' '(' \
 		-name '*.db' \
 		-o -name '*.exe' \
+		-o -name '*.ico' \
 		-o -name '*.out' \
 		-o -name '*.png' \
 		-o -name '*.svg' \
 		-o -name '*.tar.gz' \
 		-o -name '*.test' \
+		-o -name '*.woff2' \
 		-o -name '*.zip' \
 		-o -name 'AdGuardHome' \
 		-o -name 'adguard-home' \
 		')' \
 		-print \
 		| while read -r f; do
-			grep -e '[[:space:]]$' -n -- "$f" \
+			{ grep -e '[[:space:]]$' -n -- "$f" || :; } \
 				| sed -e "s:^:${f}\::" -e 's/ \+$/>>>&<<</'
 		done
 }
@@ -117,6 +114,16 @@ run_linter -e valid_json
 go="${GO:-go}"
 readonly go
 
+"$go" tool yamlfmt \
+	--lint \
+	./*.yaml \
+	./.github/*.yml \
+	./.github/*/*.yaml \
+	./.github/*/*.yml \
+	./internal/next/*.yaml \
+	./snap/*.yaml \
+	;
+
 find_with_ignore \
 	-type 'f' \
 	'(' \
@@ -127,4 +134,5 @@ find_with_ignore \
 	-o -name '*.yaml' \
 	-o -name '*.yml' \
 	')' \
-	-exec "$go" 'tool' 'misspell' '--error' '{}' '+'
+	-exec "$go" 'tool' 'misspell' '--error' '{}' '+' \
+	;

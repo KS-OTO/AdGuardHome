@@ -12,6 +12,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # 允许 GITHUB_TOKEN 推送包含 .github/workflows/ 变更的合并提交，
+      # 否则上游重构 CI 文件时兜底分支推送会被 GitHub 拒绝（缺少 workflow scope）。
+      workflows: write
 
     steps:
       - name: Checkout

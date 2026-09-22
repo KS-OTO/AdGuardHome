@@ -1,0 +1,229 @@
+import { createSignal, createMemo, createEffect, onCleanup, Show } from 'solid-js';
+
+import theme from 'panel/lib/theme';
+import { PageLoader } from 'panel/common/ui/Loader';
+import { dashboardState, toggleProtection, getClients } from 'panel/stores/dashboard';
+import { statsState, getStats, getStatsConfig, enableStatistics } from 'panel/stores/stats';
+import { accessState, getAccessList } from 'panel/stores/access';
+import { getStoredStatsPeriod } from 'panel/helpers/statistics';
+import { LocalStorageHelper, LOCAL_STORAGE_KEYS } from 'panel/helpers/localStorageHelper';
+import { ONE_SECOND_IN_MS, HOUR, DAY, STATS_INTERVALS_DAYS } from 'panel/helpers/constants';
+
+import { Header, getPeriodLabel } from './blocks/Header/Header';
+import { StatCards } from './blocks/StatCards';
+import { EmptyState } from './blocks/EmptyState/EmptyState';
+import { GeneralStatistics } from './blocks/GeneralStatistics';
+import { TopClients } from './blocks/TopClients';
+import { TopQueriedDomains } from './blocks/TopQueriedDomains';
+import { TopBlockedDomains } from './blocks/TopBlockedDomains';
+import { TopUpstreams } from './blocks/TopUpstreams';
+import { UpstreamAvgTime } from './blocks/UpstreamAvgTime';
+
+import s from './Dashboard.module.pcss';
+
+export const Dashboard = () => {
+    const [remainingTime, setRemainingTime] = createSignal<number | null>(null);
+    const [selectedPeriod, setSelectedPeriod] = createSignal(getStoredStatsPeriod());
+    let timerRef: ReturnType<typeof setInterval> | null = null;
+
+    const startCountdown = (duration: number) => {
+        if (timerRef) {
+            clearInterval(timerRef);
+        }
+        setRemainingTime(duration);
+        timerRef = setInterval(() => {
+            const prev = remainingTime();
+            if (prev !== null && prev > ONE_SECOND_IN_MS) {
+                setRemainingTime(prev - ONE_SECOND_IN_MS);
+            } else {
+                if (timerRef) {
+                    clearInterval(timerRef);
+                    timerRef = null;
+                }
+                toggleProtection(null);
+                setRemainingTime(null);
+            }
+        }, ONE_SECOND_IN_MS);
+    };
+
+    createEffect(() => {
+        const protectionDisabledDuration = dashboardState.protectionDisabledDuration;
+        if (protectionDisabledDuration && protectionDisabledDuration > 0 && timerRef === null) {
+            startCountdown(protectionDisabledDuration);
+        }
+    });
+
+    onCleanup(() => {
+        if (timerRef) {
+            clearInterval(timerRef);
+        }
+    });
+
+    const effectiveMaxStatsInterval = createMemo(() => {
+        const maxStatsInterval = statsState.interval || DAY;
+        return maxStatsInterval >= HOUR ? maxStatsInterval : DAY;
+    });
+
+    const periodIntervals = createMemo(() => {
+        const intervals = STATS_INTERVALS_DAYS.filter(
+            (interval) => interval <= effectiveMaxStatsInterval(),
+        );
+
+        if (!intervals.includes(effectiveMaxStatsInterval())) {
+            intervals.push(effectiveMaxStatsInterval());
+        }
+
+        return intervals.sort((a, b) => a - b);
+    });
+
+    const periodOptions = createMemo(() =>
+        periodIntervals().map((interval) => ({
+            value: interval,
+            label: getPeriodLabel(interval),
+        })),
+    );
+
+    const maxAvailablePeriod = createMemo(
+        () => periodIntervals()[periodIntervals().length - 1] || DAY,
+    );
+
+    const effectivePeriod = createMemo(() => Math.min(selectedPeriod(), maxAvailablePeriod()));
+
+    createEffect(() => {
+        const period = effectivePeriod();
+        getStats(period);
+        getStatsConfig();
+        getClients();
+        getAccessList();
+    });
+
+    const handleRefreshStats = () => {
+        getStats(effectivePeriod());
+        getStatsConfig();
+        getClients();
+        getAccessList();
+    };
+
+    const handleToggleProtection = (enabled: boolean, duration?: number) => {
+        if (!enabled && timerRef) {
+            clearInterval(timerRef);
+            timerRef = null;
+            setRemainingTime(null);
+        }
+        toggleProtection(enabled ? duration : null);
+    };
+
+    const handlePeriodChange = (period: number) => {
+        setSelectedPeriod(period);
+        LocalStorageHelper.setItem(LOCAL_STORAGE_KEYS.STATS_PERIOD, period);
+    };
+
+    const isLoading = () =>
+        statsState.processingStats || statsState.processingGetConfig || accessState.processing;
+
+    const hasStatsData = () =>
+        statsState.numDnsQueries > 0 ||
+        statsState.dnsQueries.length > 0 ||
+        statsState.topClients.length > 0 ||
+        statsState.topQueriedDomains.length > 0 ||
+        !statsState.enabled;
+
+    const [isInitialLoading, setIsInitialLoading] = createSignal(!hasStatsData());
+
+    createEffect(() => {
+        if (isInitialLoading() && !isLoading()) {
+            setIsInitialLoading(false);
+        }
+    });
+
+    return (
+        <div class={theme.layout.container}>
+            <div class={theme.layout.containerIn}>
+                <Header
+                    protectionEnabled={!!dashboardState.protectionEnabled}
+                    processingProtection={dashboardState.processingProtection}
+                    remainingTime={remainingTime()}
+                    selectedPeriod={effectivePeriod()}
+                    periodOptions={periodOptions()}
+                    isLoading={isLoading()}
+                    onToggleProtection={handleToggleProtection}
+                    onRefreshStats={handleRefreshStats}
+                    onPeriodChange={handlePeriodChange}
+                />
+
+                <Show
+                    when={!isInitialLoading()}
+                    fallback={
+                        <div class={s.loader}>
+                            <PageLoader />
+                        </div>
+                    }
+                >
+                    <StatCards
+                        numDnsQueries={statsState.numDnsQueries}
+                        numBlockedFiltering={statsState.numBlockedFiltering}
+                        numReplacedSafebrowsing={statsState.numReplacedSafebrowsing}
+                        numReplacedParental={statsState.numReplacedParental}
+                        dnsQueries={statsState.dnsQueries}
+                        blockedFiltering={statsState.blockedFiltering}
+                        replacedSafebrowsing={statsState.replacedSafebrowsing}
+                        replacedParental={statsState.replacedParental}
+                        timeUnits={statsState.timeUnits}
+                    />
+
+                    <Show
+                        when={statsState.enabled}
+                        fallback={
+                            <EmptyState
+                                mode="disabled"
+                                class={s.emptyState}
+                                onEnable={() => enableStatistics(effectivePeriod())}
+                            />
+                        }
+                    >
+                        <div class={s.statContainer}>
+                            <GeneralStatistics
+                                numDnsQueries={statsState.numDnsQueries}
+                                numBlockedFiltering={statsState.numBlockedFiltering}
+                                numReplacedSafebrowsing={statsState.numReplacedSafebrowsing}
+                                numReplacedParental={statsState.numReplacedParental}
+                                numReplacedSafesearch={statsState.numReplacedSafesearch}
+                                avgProcessingTime={statsState.avgProcessingTime}
+                            />
+
+                            <TopClients
+                                topClients={statsState.topClients}
+                                numDnsQueries={statsState.numDnsQueries}
+                                period={effectivePeriod()}
+                            />
+
+                            <TopQueriedDomains
+                                topQueriedDomains={statsState.topQueriedDomains}
+                                numDnsQueries={statsState.numDnsQueries}
+                                period={effectivePeriod()}
+                            />
+
+                            <TopBlockedDomains
+                                topBlockedDomains={statsState.topBlockedDomains}
+                                numBlockedFiltering={statsState.numBlockedFiltering}
+                                period={effectivePeriod()}
+                            />
+
+                            <TopUpstreams
+                                topUpstreamsResponses={statsState.topUpstreamsResponses}
+                                numDnsQueries={statsState.numDnsQueries}
+                                period={effectivePeriod()}
+                            />
+
+                            <UpstreamAvgTime
+                                topUpstreamsAvgTime={statsState.topUpstreamsAvgTime}
+                                avgProcessingTime={statsState.avgProcessingTime}
+                                period={effectivePeriod()}
+                            />
+                        </div>
+                    </Show>
+                </Show>
+            </div>
+        </div>
+    );
+};
