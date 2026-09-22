@@ -3,7 +3,7 @@
 # This comment is used to simplify checking local copies of the script.  Bump
 # this number every time a significant change is made to this script.
 #
-# AdGuard-Project-Version: 17
+# AdGuard-Project-Version: 19
 
 verbose="${VERBOSE:-0}"
 readonly verbose
@@ -34,7 +34,9 @@ set -f -u
 #
 #   *  Packages log and github.com/AdguardTeam/golibs/log are replaced by
 #      stdlib's new package log/slog and AdGuard's new utilities package
-#      github.com/AdguardTeam/golibs/logutil/slogutil.
+#      github.com/AdguardTeam/golibs/logutil/slogutil.  The exceptions are
+#      packages home, dhcpd, and aghos, where package log is used before the
+#      main logger is configured.
 #
 #   *  Package github.com/prometheus/client_golang/prometheus/promauto is not
 #      recommended, as it encourages reliance on global state.
@@ -56,8 +58,9 @@ set -f -u
 #   *  Package unsafe is… unsafe.
 #
 # Currently, the only standard exception are files generated from protobuf
-# schemas, which use package reflect.  If your project needs more exceptions,
-# add and document them.
+# schemas, which use package reflect.  Additionally, some packages are allowed
+# to use package log, see above.  If your project needs more exceptions, add and
+# document them.
 #
 # NOTE:  Flag -H for grep is non-POSIX but all of Busybox, GNU, macOS, and
 # OpenBSD support it.
@@ -86,10 +89,24 @@ blocklist_imports() {
 		'-e' "$import_or_tab"'"golang.org/x/exp/slices"$' \
 		'-e' "$import_or_tab"'"golang.org/x/net/context"$' \
 		'-e' "$import_or_tab"'"io/ioutil"$' \
-		'-e' "$import_or_tab"'"log"$' \
 		'-e' "$import_or_tab"'"reflect"$' \
 		'-e' "$import_or_tab"'"sort"$' \
 		'-e' "$import_or_tab"'"unsafe"$' \
+		'-n' \
+		'{}' \
+		';'
+
+	# Package home is allowed to use package log, see the comment above.
+	find_with_ignore \
+		-type 'f' \
+		-name '*.go' \
+		'!' '(' \
+		-path './internal/home/*' \
+		')' \
+		-exec \
+		'grep' \
+		'-H' \
+		'-e' "$import_or_tab"'"log"$' \
 		'-n' \
 		'{}' \
 		';'
@@ -164,7 +181,7 @@ run_linter -e underscores
 
 run_linter -e "$go" tool gofumpt --extra -e -l .
 
-run_linter "${GO:-go}" vet ./...
+run_linter "${GO:-go}" vet work
 
 # govulncheck is not stricly reproducible, because it queries the VulnDB, which
 # is updated constantly.  If a stricly reproducible lint is desired, for example
@@ -181,19 +198,18 @@ else
 	run_linter "$go" tool govulncheck work
 fi
 
-run_linter "$go" tool gocyclo --over 10 .
+# TODO(e.burkov):  Improve the ignore mechanism to take the go.mod ignore
+# section into account.
+run_linter "$go" tool gocyclo --over 10 ./internal/ ./scripts/
 
 # TODO(a.garipov): Enable 10 for all.
-run_linter "$go" tool gocognit --over='20' \
-	./internal/querylog/ \
-	;
-
 run_linter "$go" tool gocognit --over='14' \
 	./internal/dhcpd \
 	;
 
 run_linter "$go" tool gocognit --over='10' \
 	./internal/aghalg/ \
+	./internal/agh/ \
 	./internal/aghhttp/ \
 	./internal/aghnet/ \
 	./internal/aghos/ \
@@ -211,6 +227,8 @@ run_linter "$go" tool gocognit --over='10' \
 	./internal/ipset \
 	./internal/next/ \
 	./internal/ossvc/ \
+	./internal/permcheck/ \
+	./internal/querylog/ \
 	./internal/rdns/ \
 	./internal/schedule/ \
 	./internal/stats/ \
@@ -220,9 +238,9 @@ run_linter "$go" tool gocognit --over='10' \
 	./scripts/ \
 	;
 
-run_linter "$go" tool ineffassign ./...
+run_linter "$go" tool ineffassign work
 
-run_linter "$go" tool unparam ./...
+run_linter "$go" tool unparam work
 
 find_with_ignore \
 	-type 'f' \
@@ -237,7 +255,7 @@ find_with_ignore \
 	')' \
 	-exec "$go" 'tool' 'misspell' '--error' '{}' '+'
 
-run_linter "$go" tool nilness ./...
+run_linter "$go" tool nilness work
 
 # TODO(a.garipov): Enable for all.
 run_linter "$go" tool fieldalignment \
@@ -250,6 +268,7 @@ run_linter "$go" tool fieldalignment \
 	./internal/aghuser/ \
 	./internal/arpdb/ \
 	./internal/client/ \
+	./internal/configmgr/ \
 	./internal/configmigrate/ \
 	./internal/dhcpsvc/ \
 	./internal/filtering/hashprefix/ \
@@ -268,7 +287,7 @@ run_linter "$go" tool fieldalignment \
 	./internal/whois/ \
 	;
 
-run_linter -e "$go" tool shadow --strict ./...
+run_linter -e "$go" tool shadow --strict work
 
 # TODO(a.garipov): Enable for all.
 # TODO(e.burkov):  Re-enable G115.
@@ -300,15 +319,12 @@ run_linter "$go" tool gosec --exclude=G115 --fmt=golint --quiet \
 	./internal/whois/ \
 	;
 
-run_linter "$go" tool errcheck ./...
+run_linter "$go" tool errcheck work
 
-staticcheck_matrix='
-darwin:  GOOS=darwin
-freebsd: GOOS=freebsd
-linux:   GOOS=linux
-openbsd: GOOS=openbsd
-windows: GOOS=windows
-'
-readonly staticcheck_matrix
-
-printf '%s' "$staticcheck_matrix" | run_linter "$go" tool staticcheck --matrix ./...
+run_linter "$go" tool staticcheck --matrix work <<-'EOF'
+	darwin:  GOOS=darwin
+	freebsd: GOOS=freebsd
+	linux:   GOOS=linux
+	openbsd: GOOS=openbsd
+	windows: GOOS=windows
+EOF

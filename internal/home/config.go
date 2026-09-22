@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
@@ -16,10 +15,12 @@ import (
 	"github.com/AdguardTeam/AdGuardHome/internal/aghalg"
 	"github.com/AdguardTeam/AdGuardHome/internal/aghos"
 	"github.com/AdguardTeam/AdGuardHome/internal/aghtls"
+	"github.com/AdguardTeam/AdGuardHome/internal/configmgr"
 	"github.com/AdguardTeam/AdGuardHome/internal/configmigrate"
 	"github.com/AdguardTeam/AdGuardHome/internal/dhcpd"
 	"github.com/AdguardTeam/AdGuardHome/internal/dnsforward"
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
+	"github.com/AdguardTeam/AdGuardHome/internal/filtering/rulelist"
 	"github.com/AdguardTeam/AdGuardHome/internal/querylog"
 	"github.com/AdguardTeam/AdGuardHome/internal/schedule"
 	"github.com/AdguardTeam/AdGuardHome/internal/stats"
@@ -28,7 +29,6 @@ import (
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/timeutil"
-	"github.com/google/go-cmp/cmp"
 	"github.com/google/renameio/v2/maybe"
 	yaml "go.yaml.in/yaml/v4"
 )
@@ -42,39 +42,6 @@ const (
 	// FS-based rule lists.
 	userFilterDataDir = "userfilters"
 )
-
-// logSettings are the logging settings part of the configuration file.
-type logSettings struct {
-	// Enabled indicates whether logging is enabled.
-	Enabled bool `yaml:"enabled"`
-
-	// File is the path to the log file.  If empty, logs are written to stdout.
-	// If "syslog", logs are written to syslog.
-	File string `yaml:"file"`
-
-	// MaxBackups is the maximum number of old log files to retain.
-	//
-	// NOTE: MaxAge may still cause them to get deleted.
-	MaxBackups int `yaml:"max_backups"`
-
-	// MaxSize is the maximum size of the log file before it gets rotated, in
-	// megabytes.  The default value is 100 MB.
-	MaxSize int `yaml:"max_size"`
-
-	// MaxAge is the maximum duration for retaining old log files, in days.
-	MaxAge int `yaml:"max_age"`
-
-	// Compress determines, if the rotated log files should be compressed using
-	// gzip.
-	Compress bool `yaml:"compress"`
-
-	// LocalTime determines, if the time used for formatting the timestamps in
-	// is the computer's local time.
-	LocalTime bool `yaml:"local_time"`
-
-	// Verbose determines, if verbose (aka debug) logging is enabled.
-	Verbose bool `yaml:"verbose"`
-}
 
 // osConfig contains OS-related configuration.
 type osConfig struct {
@@ -110,6 +77,8 @@ type clientSourcesConfig struct {
 //
 // Field ordering is important, YAML fields better not to be reordered, if it's
 // not absolutely necessary.
+//
+// TODO(d.kolyshev):  Use [configmgr.Config].
 type configuration struct {
 	// Raw file data to avoid re-reading of configuration file
 	// It's reset after config is parsed
@@ -159,7 +128,7 @@ type configuration struct {
 	Clients *clientsConfig `yaml:"clients"`
 
 	// Log is a block with log configuration settings.
-	Log logSettings `yaml:"log"`
+	Log *configmgr.LogConfig `yaml:"log"`
 
 	OSConfig *osConfig `yaml:"os"`
 
@@ -181,8 +150,11 @@ type configuration struct {
 // Field ordering is important, YAML fields better not to be reordered, if it's
 // not absolutely necessary.
 type httpConfig struct {
-	// Pprof defines the profiling HTTP handler.
+	// Pprof defines the profiling HTTP handler.  It is never nil.
 	Pprof *httpPprofConfig `yaml:"pprof"`
+
+	// DoH contains DNS-over-HTTPS configuration.  It is never nil.
+	DoH *doHConfig `yaml:"doh"`
 
 	// Address is the address to serve the web UI on.
 	Address netip.AddrPort
@@ -204,6 +176,20 @@ type httpPprofConfig struct {
 
 	// Enabled defines if the profiling handler is enabled.
 	Enabled bool `yaml:"enabled"`
+}
+
+// doHConfig is the block with DNS-over-HTTPS configuration.
+type doHConfig struct {
+	// Routes is the list of HTTP route patterns for DoH requests.  Default
+	// routes are:
+	//   - "GET /dns-query"
+	//   - "POST /dns-query"
+	//   - "GET /dns-query/{ClientID}"
+	//   - "POST /dns-query/{ClientID}"
+	Routes []string `yaml:"routes"`
+
+	// InsecureEnabled allows DoH queries via unencrypted HTTP.
+	InsecureEnabled bool `yaml:"insecure_enabled"`
 }
 
 // dnsConfig is a block with DNS configuration params.
@@ -285,9 +271,12 @@ type pendingRequests struct {
 }
 
 // tlsConfigSettings is the TLS configuration for DNS-over-TLS, DNS-over-QUIC,
-// and HTTPS.  When adding new properties, update the [tlsConfigSettings.clone]
-// and [tlsConfigSettings.setPrivateFieldsAndCompare] methods as necessary.
+// and HTTPS.  When adding new properties, update the conversion functions
+// [confFromTLSSettings] and [confToTLSSettings] as necessary.
 type tlsConfigSettings struct {
+	// Status is the current status of the configuration.
+	Status tlsConfigStatus `yaml:"-" json:"-"`
+
 	// Enabled indicates whether encryption (DoT/DoH/HTTPS) is enabled.
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
@@ -314,14 +303,8 @@ type tlsConfigSettings struct {
 	// if PortDNSCrypt is not zero.
 	//
 	// See https://github.com/AdguardTeam/dnsproxy and
-	// https://github.com/ameshkov/dnscrypt.
+	// https://github.com/AdguardTeam/dnscrypt.
 	DNSCryptConfigFile string `yaml:"dnscrypt_config_file" json:"dnscrypt_config_file"`
-
-	// AllowUnencryptedDoH allows DoH queries via unencrypted HTTP (e.g. for
-	// reverse proxying).
-	//
-	// TODO(s.chzhen):  Add this option into the Web UI.
-	AllowUnencryptedDoH bool `yaml:"allow_unencrypted_doh" json:"allow_unencrypted_doh"`
 
 	// CertificateChain is the PEM-encoded certificate chain.  Must be empty if
 	// [tlsConfigSettings.CertificatePath] is provided.
@@ -353,47 +336,9 @@ type tlsConfigSettings struct {
 	// StrictSNICheck controls if the connections with SNI mismatching the
 	// certificate's ones should be rejected.
 	StrictSNICheck bool `yaml:"strict_sni_check" json:"-"`
-}
 
-// clone returns a deep copy of c.
-func (c *tlsConfigSettings) clone() (clone *tlsConfigSettings) {
-	clone = &tlsConfigSettings{}
-	*clone = *c
-
-	clone.OverrideTLSCiphers = slices.Clone(c.OverrideTLSCiphers)
-	clone.CertificateChainData = slices.Clone(c.CertificateChainData)
-	clone.PrivateKeyData = slices.Clone(c.PrivateKeyData)
-
-	return clone
-}
-
-// setPrivateFieldsAndCompare sets any missing properties in conf to match those
-// in c and returns true if TLS configurations are equal.  conf must not be be
-// nil.
-// It sets the following properties because these are not accepted from the
-// frontend:
-//
-//	[tlsConfigSettings.AllowUnencryptedDoH]
-//	[tlsConfigSettings.DNSCryptConfigFile]
-//	[tlsConfigSettings.OverrideTLSCiphers]
-//	[tlsConfigSettings.PortDNSCrypt]
-//
-// The following properties are skipped as they are set by
-// [tlsManager.loadTLSConfig]:
-//
-//	[tlsConfigSettings.CertificateChainData]
-//	[tlsConfigSettings.PrivateKeyData]
-func (c *tlsConfigSettings) setPrivateFieldsAndCompare(conf *tlsConfigSettings) (equal bool) {
-	conf.OverrideTLSCiphers = slices.Clone(c.OverrideTLSCiphers)
-
-	// TODO(s.chzhen):  Remove this once the frontend supports it.
-	conf.AllowUnencryptedDoH = c.AllowUnencryptedDoH
-
-	conf.DNSCryptConfigFile = c.DNSCryptConfigFile
-	conf.PortDNSCrypt = c.PortDNSCrypt
-
-	// TODO(a.garipov): Define a custom comparer.
-	return cmp.Equal(c, conf)
+	// ServePlainDNS defines whether to serve a plain DNS.
+	ServePlainDNS bool `yaml:"-" json:"-"`
 }
 
 type queryLogConfig struct {
@@ -461,6 +406,15 @@ var config = &configuration{
 			Enabled: false,
 			Port:    6060,
 		},
+		DoH: &doHConfig{
+			Routes: []string{
+				"GET /dns-query",
+				"POST /dns-query",
+				"GET /dns-query/{ClientID}",
+				"POST /dns-query/{ClientID}",
+			},
+			InsecureEnabled: false,
+		},
 	},
 	DNS: dnsConfig{
 		BindHosts: []netip.Addr{netip.IPv4Unspecified()},
@@ -483,6 +437,7 @@ var config = &configuration{
 			CacheSize:                4 * 1024 * 1024,
 			CacheOptimisticAnswerTTL: timeutil.Duration(30 * time.Second),
 			CacheOptimisticMaxAge:    timeutil.Duration(12 * time.Hour),
+			EnableDNSSEC:             true,
 
 			EDNSClientSubnet: &dnsforward.EDNSClientSubnet{
 				CustomIP:  netip.Addr{},
@@ -552,6 +507,7 @@ var config = &configuration{
 		ParentalEnabled:     false,
 		SafeBrowsingEnabled: false,
 
+		MaxHTTPSize:           rulelist.DefaultMaxRuleListSize,
 		SafeBrowsingCacheSize: 1 * 1024 * 1024,
 		SafeSearchCacheSize:   1 * 1024 * 1024,
 		ParentalCacheSize:     1 * 1024 * 1024,
@@ -594,16 +550,6 @@ var config = &configuration{
 			DHCP:      true,
 			HostsFile: true,
 		},
-	},
-	Log: logSettings{
-		Enabled:    true,
-		File:       "",
-		MaxBackups: 0,
-		MaxSize:    100,
-		MaxAge:     3,
-		Compress:   false,
-		LocalTime:  false,
-		Verbose:    false,
 	},
 	OSConfig:      &osConfig{},
 	SchemaVersion: configmigrate.LastSchemaVersion,
@@ -859,7 +805,7 @@ func readConfigFile(
 func (c *configuration) write(
 	ctx context.Context,
 	l *slog.Logger,
-	tlsMgr *tlsManager,
+	extTLSConf *aghtls.ExtendedTLSConfig,
 	auth *auth,
 	workDir string,
 	confPath string,
@@ -871,9 +817,8 @@ func (c *configuration) write(
 		config.Users = auth.usersList(ctx)
 	}
 
-	if tlsMgr != nil {
-		tlsConf := tlsMgr.config()
-		config.TLS = *tlsConf
+	if extTLSConf != nil {
+		config.TLS = confToTLSSettings(extTLSConf)
 	}
 
 	if globalContext.stats != nil {
@@ -964,7 +909,7 @@ type defaultConfigModifier struct {
 	auth     *auth
 	config   *configuration
 	logger   *slog.Logger
-	tlsMgr   *tlsManager
+	tlsMgr   aghtls.Manager
 	workDir  string
 	confPath string
 }
@@ -993,7 +938,12 @@ var _ agh.ConfigModifier = (*defaultConfigModifier)(nil)
 // Apply implements the [agh.ConfigModifier] interface for
 // *defaultConfigModifier.
 func (cm *defaultConfigModifier) Apply(ctx context.Context) {
-	err := cm.config.write(ctx, cm.logger, cm.tlsMgr, cm.auth, cm.workDir, cm.confPath)
+	var extTLSConf *aghtls.ExtendedTLSConfig
+	if cm.tlsMgr != nil {
+		extTLSConf = cm.tlsMgr.ExtendedTLSConfig()
+	}
+
+	err := cm.config.write(ctx, cm.logger, extTLSConf, cm.auth, cm.workDir, cm.confPath)
 	if err != nil {
 		cm.logger.ErrorContext(ctx, "writing config", slogutil.KeyError, err)
 	}
@@ -1005,6 +955,6 @@ func (cm *defaultConfigModifier) setAuth(a *auth) {
 }
 
 // setTLSManager sets the TLS manager used by Apply.
-func (cm *defaultConfigModifier) setTLSManager(m *tlsManager) {
+func (cm *defaultConfigModifier) setTLSManager(m aghtls.Manager) {
 	cm.tlsMgr = m
 }

@@ -152,6 +152,28 @@ Optional environment:
 
 - `VERBOSE`: verbosity level. `1` shows every command that is run and every Go package that is processed. `2` also shows subcommands. The default value is `0`, don’t be verbose.
 
+### `pack-release.sh`: Pack release files for all platforms
+
+Required environment:
+
+- `CHANNEL`: release channel, see above.
+
+Optional environment:
+
+- `ARCH` and `OS`: space-separated list of architectures and operating systems for which to pack a release. For example, to pack only for 64-bit ARM and AMD on Linux and Darwin:
+
+    ```sh
+    make ARCH='amd64 arm64' OS='darwin linux' … pack-release
+    ```
+
+  The default value is `''`, which means pack everything.
+
+- `DIST_DIR`: the directory to pack a release into. The default value is `dist`.
+
+- `VERBOSE`: `1` to be verbose, `2` to also print environment.
+
+- `VERSION`: release version. Will be set by `version.sh` if it is unset or if it has the default `Makefile` value of `v0.0.0`.
+
 ### `version.sh`: Generate And Print The Current Version
 
 Required environment:
@@ -202,11 +224,14 @@ Optional environment:
 
 - `go run ./scripts/translations summary`: show the current locales summary.
 
+    > [!NOTE]
+    > The following script may produce false positives because JavaScript uses template literals like `servicesgroup.${group.id}.name`, so the actual key won't be found by substring search.
+
 - `go run ./scripts/translations unused`: show the list of unused strings.
 
 - `go run ./scripts/translations auto-add`: add locales with additions to the git and restore locales with deletions.
 
-After the download you’ll find the output locales in the `client/src/__locales/` directory.
+After the download you’ll find the output locales in the configured directory.
 
 Optional environment:
 
@@ -216,9 +241,7 @@ Optional environment:
 
 - `TWOSKY_URI`: set an alternative URL for `download` or `upload`.
 
-- `TWOSKY_PROJECT_ID`: set an alternative project ID for `download` or `upload`.
-
-    Deprectated: This environment variable should not be used since the script began supporting multiple configurations.
+- `TWOSKY_PROJECT_ID`: set an alternative project ID. The default value is `home`.
 
 ## `companiesdb/`: Whotracks.me database converter
 

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"net/netip"
 	"testing"
@@ -86,9 +87,12 @@ func TestServer_ProcessInitial(t *testing.T) {
 				ServePlainDNS: true,
 			}
 
-			s := createTestServer(t, &filtering.Config{
-				BlockingMode: filtering.BlockingModeDefault,
-			}, c)
+			s := createTestServer(
+				t,
+				&filtering.Config{BlockingMode: filtering.BlockingModeDefault},
+				c,
+				testTLSManager,
+			)
 
 			var gotAddr netip.Addr
 			s.addrProc = &aghtest.AddressProcessor{
@@ -104,7 +108,7 @@ func TestServer_ProcessInitial(t *testing.T) {
 				},
 			}
 
-			gotRC := s.processInitial(testutil.ContextWithTimeout(t, testTimeout), dctx)
+			gotRC := s.processInitial(testutil.ContextWithTimeout(t, testTimeout), testLogger, dctx)
 			assert.Equal(t, tc.wantRC, gotRC)
 			assert.Equal(t, testClientAddrPort.Addr(), gotAddr)
 
@@ -187,9 +191,12 @@ func TestServer_ProcessFilteringAfterResponse(t *testing.T) {
 				ServePlainDNS: true,
 			}
 
-			s := createTestServer(t, &filtering.Config{
-				BlockingMode: filtering.BlockingModeDefault,
-			}, c)
+			s := createTestServer(
+				t,
+				&filtering.Config{BlockingMode: filtering.BlockingModeDefault},
+				c,
+				testTLSManager,
+			)
 
 			resp := newResp(dns.RcodeSuccess, tc.req, tc.respAns)
 			dctx := &dnsContext{
@@ -208,7 +215,7 @@ func TestServer_ProcessFilteringAfterResponse(t *testing.T) {
 				},
 			}
 			ctx := testutil.ContextWithTimeout(t, testTimeout)
-			gotRC := s.processFilteringAfterResponse(ctx, dctx)
+			gotRC := s.processFilteringAfterResponse(ctx, testLogger, dctx)
 			assert.Equal(t, tc.wantRC, gotRC)
 			assert.Equal(t, newResp(dns.RcodeSuccess, tc.req, tc.wantRespAns), dctx.proxyCtx.Res)
 		})
@@ -320,33 +327,37 @@ func TestServer_ProcessDDRQuery(t *testing.T) {
 		addrsDoH:   addrsDoH,
 	}}
 
-	_, certPem, keyPem := createServerTLSConfig(t)
-	cert, err := tls.X509KeyPair(certPem, keyPem)
-	require.NoError(t, err)
+	tlsConf, _, _ := createServerTLSConfig(t)
+
+	tlsManager := &aghtest.Manager{}
+	tlsManager.OnTLSConfig = func() (conf *tls.Config) { return tlsConf }
+	tlsManager.OnHasIPAddrs = func() (ok bool) { return true }
+	tlsManager.OnRootCAs = func() (cert *x509.CertPool) { return tlsConf.RootCAs }
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := createTestServer(t, &filtering.Config{
-				BlockingMode: filtering.BlockingModeDefault,
-			}, ServerConfig{
-				Config: Config{
-					HandleDDR:        tc.ddrEnabled,
-					UpstreamMode:     UpstreamModeLoadBalance,
-					EDNSClientSubnet: &EDNSClientSubnet{Enabled: false},
-					ClientsContainer: EmptyClientsContainer{},
+			s := createTestServer(
+				t,
+				&filtering.Config{
+					BlockingMode: filtering.BlockingModeDefault,
 				},
-				TLSConf: &TLSConfig{
-					ServerName:       ddrTestDomainName,
-					Cert:             &cert,
-					TLSListenAddrs:   tc.addrsDoT,
-					HTTPSListenAddrs: tc.addrsDoH,
-					QUICListenAddrs:  tc.addrsDoQ,
+				ServerConfig{
+					Config: Config{
+						HandleDDR:        tc.ddrEnabled,
+						UpstreamMode:     UpstreamModeLoadBalance,
+						EDNSClientSubnet: &EDNSClientSubnet{Enabled: false},
+						ClientsContainer: EmptyClientsContainer{},
+					},
+					TLSConf: &TLSConfig{
+						ServerName:       ddrTestDomainName,
+						TLSListenAddrs:   tc.addrsDoT,
+						HTTPSListenAddrs: tc.addrsDoH,
+						QUICListenAddrs:  tc.addrsDoQ,
+					},
+					ServePlainDNS: true,
 				},
-				ServePlainDNS: true,
-			})
-			// TODO(e.burkov):  Generate a certificate actually containing the
-			// IP addresses.
-			s.hasIPAddrs = true
+				tlsManager,
+			)
 
 			req := createTestMessageWithType(tc.host, tc.qtype)
 
@@ -356,7 +367,7 @@ func TestServer_ProcessDDRQuery(t *testing.T) {
 				},
 			}
 
-			res := s.processDDRQuery(testutil.ContextWithTimeout(t, testTimeout), dctx)
+			res := s.processDDRQuery(testutil.ContextWithTimeout(t, testTimeout), testLogger, dctx)
 			require.Equal(t, tc.wantRes, res)
 
 			if tc.wantRes != resultCodeFinish {
@@ -464,7 +475,7 @@ func TestServer_ProcessDHCPHosts_localRestriction(t *testing.T) {
 				},
 			}
 
-			res := s.processDHCPHosts(testutil.ContextWithTimeout(t, testTimeout), dctx)
+			res := s.processDHCPHosts(testutil.ContextWithTimeout(t, testTimeout), testLogger, dctx)
 
 			pctx := dctx.proxyCtx
 			if !tc.isLocalCli {
@@ -609,7 +620,7 @@ func TestServer_ProcessDHCPHosts(t *testing.T) {
 		}
 
 		t.Run(tc.name, func(t *testing.T) {
-			res := s.processDHCPHosts(testutil.ContextWithTimeout(t, testTimeout), dctx)
+			res := s.processDHCPHosts(testutil.ContextWithTimeout(t, testTimeout), testLogger, dctx)
 			pctx := dctx.proxyCtx
 			assert.Equal(t, tc.wantRes, res)
 			require.NoError(t, dctx.err)
@@ -644,13 +655,14 @@ func TestServer_ProcessUpstream_localPTR(t *testing.T) {
 	const locDomain = "some.local."
 	const reqAddr = "1.1.168.192.in-addr.arpa."
 
+	pt := testutil.NewPanicT(t)
 	localUpsHdlr := dns.HandlerFunc(func(w dns.ResponseWriter, req *dns.Msg) {
 		resp := cmp.Or(
 			aghtest.MatchedResponse(req, dns.TypePTR, reqAddr, locDomain),
 			(&dns.Msg{}).SetRcode(req, dns.RcodeNameError),
 		)
 
-		require.NoError(testutil.PanicT{}, w.WriteMsg(resp))
+		require.NoError(pt, w.WriteMsg(resp))
 	})
 	localUpsAddr := aghtest.StartLocalhostUpstream(t, localUpsHdlr).String()
 
@@ -682,10 +694,11 @@ func TestServer_ProcessUpstream_localPTR(t *testing.T) {
 				LocalPTRResolvers: []string{localUpsAddr},
 				ServePlainDNS:     true,
 			},
+			testTLSManager,
 		)
 		ctx := testutil.ContextWithTimeout(t, testTimeout)
 		pctx := newPrxCtx()
-		rc := s.processUpstream(ctx, &dnsContext{proxyCtx: pctx})
+		rc := s.processUpstream(ctx, testLogger, &dnsContext{proxyCtx: pctx})
 		require.Equal(t, resultCodeSuccess, rc)
 		require.NotEmpty(t, pctx.Res.Answer)
 		ptr := testutil.RequireTypeAssert[*dns.PTR](t, pctx.Res.Answer[0])
@@ -712,11 +725,12 @@ func TestServer_ProcessUpstream_localPTR(t *testing.T) {
 				LocalPTRResolvers: []string{localUpsAddr},
 				ServePlainDNS:     true,
 			},
+			testTLSManager,
 		)
 		pctx := newPrxCtx()
 
 		ctx := testutil.ContextWithTimeout(t, testTimeout)
-		rc := s.processUpstream(ctx, &dnsContext{proxyCtx: pctx})
+		rc := s.processUpstream(ctx, testLogger, &dnsContext{proxyCtx: pctx})
 		require.Equal(t, resultCodeError, rc)
 		require.Empty(t, pctx.Res.Answer)
 	})

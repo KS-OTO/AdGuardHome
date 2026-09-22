@@ -10,6 +10,7 @@ import (
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
 	"github.com/AdguardTeam/dnsproxy/proxy"
 	"github.com/AdguardTeam/dnsproxy/upstream"
+	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/miekg/dns"
@@ -65,28 +66,28 @@ func TestServer_ServeDNS(t *testing.T) {
 		DNSFilter:   f,
 		PrivateNets: netutil.SubnetSetFunc(netutil.IsLocallyServed),
 		Logger:      testLogger,
+		TLSManager:  testTLSManager,
 	})
 	require.NoError(t, err)
 
 	err = s.Prepare(testutil.ContextWithTimeout(t, testTimeout), &forwardConf)
 	require.NoError(t, err)
 
-	s.conf.UpstreamConfig.Upstreams = []upstream.Upstream{
-		&aghtest.Upstream{
-			CName: map[string][]string{
-				"cname.exception.": {"cname.specific."},
-				"should.block.":    {"blocked.domain."},
-				"allowed.first.":   {"allowed.domain.", "blocked.domain."},
-				"blocked.first.":   {"blocked.domain.", "allowed.domain."},
-			},
-			IPv4: map[string][]net.IP{
-				"a.exception.": {{0, 0, 0, 1}},
-			},
-			IPv6: map[string][]net.IP{
-				"aaaa.exception.": {net.ParseIP("::1")},
-			},
-		},
+	cNames := map[string][]string{
+		"cname.exception.": {"cname.specific."},
+		"should.block.":    {"blocked.domain."},
+		"allowed.first.":   {"allowed.domain.", "blocked.domain."},
+		"blocked.first.":   {"blocked.domain.", "allowed.domain."},
 	}
+
+	ups := aghtest.NewExchangingUpstream(
+		t,
+		cNames,
+		map[string][]net.IP{"a.exception.": {{0, 0, 0, 1}}},
+		map[string][]net.IP{"aaaa.exception.": {net.ParseIP("::1")}},
+	)
+
+	s.conf.UpstreamConfig.Upstreams = []upstream.Upstream{ups}
 	startDeferStop(t, s)
 
 	testCases := []struct {
@@ -200,7 +201,10 @@ func TestServer_ServeDNS(t *testing.T) {
 		}
 
 		t.Run(tc.name, func(t *testing.T) {
-			err = s.ServeDNS(nil, dctx)
+			ctx := testutil.ContextWithTimeout(t, testTimeout)
+			ctx = slogutil.ContextWithLogger(ctx, testLogger)
+
+			err = s.ServeDNS(ctx, nil, dctx)
 			require.NoError(t, err)
 			require.NotNil(t, dctx.Res)
 
@@ -227,6 +231,7 @@ func TestServer_ServeDNS_restrictLocal(t *testing.T) {
 		intPTRAnswer = "some.local-client."
 	)
 
+	pt := testutil.NewPanicT(t)
 	localUpsHdlr := dns.HandlerFunc(func(w dns.ResponseWriter, req *dns.Msg) {
 		resp := cmp.Or(
 			aghtest.MatchedResponse(req, dns.TypePTR, extPTRQuestion, extPTRAnswer),
@@ -234,28 +239,33 @@ func TestServer_ServeDNS_restrictLocal(t *testing.T) {
 			(&dns.Msg{}).SetRcode(req, dns.RcodeNameError),
 		)
 
-		require.NoError(testutil.PanicT{}, w.WriteMsg(resp))
+		require.NoError(pt, w.WriteMsg(resp))
 	})
 	localUpsAddr := aghtest.StartLocalhostUpstream(t, localUpsHdlr).String()
 
-	s := createTestServer(t, &filtering.Config{
-		BlockingMode: filtering.BlockingModeDefault,
-	}, ServerConfig{
-		UDPListenAddrs: []*net.UDPAddr{{}},
-		TCPListenAddrs: []*net.TCPAddr{{}},
-		TLSConf:        &TLSConfig{},
-		// TODO(s.chzhen):  Add tests where EDNSClientSubnet.Enabled is true.
-		// Improve Config declaration for tests.
-		Config: Config{
-			UpstreamDNS:      []string{localUpsAddr},
-			UpstreamMode:     UpstreamModeLoadBalance,
-			EDNSClientSubnet: &EDNSClientSubnet{Enabled: false},
-			ClientsContainer: EmptyClientsContainer{},
+	s := createTestServer(
+		t,
+		&filtering.Config{
+			BlockingMode: filtering.BlockingModeDefault,
 		},
-		UsePrivateRDNS:    true,
-		LocalPTRResolvers: []string{localUpsAddr},
-		ServePlainDNS:     true,
-	})
+		ServerConfig{
+			UDPListenAddrs: []*net.UDPAddr{{}},
+			TCPListenAddrs: []*net.TCPAddr{{}},
+			TLSConf:        &TLSConfig{},
+			// TODO(s.chzhen):  Add tests where EDNSClientSubnet.Enabled is true.
+			// Improve Config declaration for tests.
+			Config: Config{
+				UpstreamDNS:      []string{localUpsAddr},
+				UpstreamMode:     UpstreamModeLoadBalance,
+				EDNSClientSubnet: &EDNSClientSubnet{Enabled: false},
+				ClientsContainer: EmptyClientsContainer{},
+			},
+			UsePrivateRDNS:    true,
+			LocalPTRResolvers: []string{localUpsAddr},
+			ServePlainDNS:     true,
+		},
+		testTLSManager,
+	)
 	startDeferStop(t, s)
 
 	testCases := []struct {
@@ -335,7 +345,10 @@ func TestServer_ServeDNS_restrictLocal(t *testing.T) {
 		}
 
 		t.Run(tc.name, func(t *testing.T) {
-			err = s.ServeDNS(s.dnsProxy, pctx)
+			ctx := testutil.ContextWithTimeout(t, testTimeout)
+			ctx = slogutil.ContextWithLogger(ctx, testLogger)
+
+			err = s.ServeDNS(ctx, s.dnsProxy, pctx)
 			require.ErrorIs(t, err, tc.wantErr)
 
 			require.NotNil(t, pctx.Res)
