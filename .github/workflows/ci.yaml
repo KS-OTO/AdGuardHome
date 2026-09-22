@@ -1,0 +1,32 @@
+'name': 'CI'
+
+# Fork 仓库的持续集成验证：上游官方 CI 仅限 AdGuardSoftwareLimited 组织运行，
+# 本工作流负责在 PR 时验证 Go 构建与核心包测试。
+
+'on':
+  'pull_request':
+    'paths':
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+  'workflow_dispatch':
+
+'permissions':
+  'contents': 'read'
+
+'jobs':
+  'build-test':
+    'runs-on': 'ubuntu-latest'
+    'steps':
+      - 'uses': 'actions/checkout@v4'
+
+      - 'name': 'Set up Go'
+        'uses': 'actions/setup-go@v5'
+        'with':
+          'go-version': '1.26.8'
+
+      - 'name': 'Build'
+        'run': 'go build -v ./...'
+
+      - 'name': 'Test internal/home'
+        'run': 'go test -count=1 ./internal/home/...'
