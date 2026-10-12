@@ -154,7 +154,6 @@ type configuration struct {
 	UnsafeUseCustomUpdateIndexURL bool `yaml:"unsafe_use_custom_update_index_url,omitempty"`
 }
 
-
 // tlsConfigSettings is the TLS configuration for DNS-over-TLS, DNS-over-QUIC,
 // and HTTPS.  When adding new properties, update the conversion functions
 // [confFromTLSSettings] and [confToTLSSettings] as necessary.
