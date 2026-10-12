@@ -324,6 +324,10 @@ func TestAuthMiddlewareDefault_public(t *testing.T) {
 		name:     "public_login",
 		wantCode: http.StatusOK,
 	}, {
+		req:      httptest.NewRequest(http.MethodGet, "/login.html", nil),
+		name:     "public_login_html",
+		wantCode: http.StatusOK,
+	}, {
 		req:      httptest.NewRequest(http.MethodGet, "/apple/doh.mobileconfig", nil),
 		name:     "public_doh_config",
 		wantCode: http.StatusOK,
@@ -372,6 +376,149 @@ func authRequest(path string, c *http.Cookie, user, pass string) (r *http.Reques
 	}
 
 	return r
+}
+
+// newCustomLoginTestMiddleware returns a new default authentication middleware
+// with the custom login page path configured, along with a session cookie for
+// an existing user.
+func newCustomLoginTestMiddleware(
+	t *testing.T,
+	customLoginPath string,
+) (mw *authMiddlewareDefault, cookie *http.Cookie, user *aghuser.User) {
+	t.Helper()
+
+	const login = aghuser.Login(testUsername)
+
+	user = newTestUser(t, testPassword, login)
+
+	usersDB := newTestUsersDB()
+	usersDB.onAll = func(_ context.Context) (us []*aghuser.User, err error) {
+		return []*aghuser.User{user}, nil
+	}
+	usersDB.onByLogin = func(_ context.Context, _ aghuser.Login) (u *aghuser.User, err error) {
+		return user, nil
+	}
+
+	var token aghuser.SessionToken
+	_, _ = rand.Read(token[:])
+
+	sessions := map[aghuser.SessionToken]*aghuser.Session{
+		token: {
+			UserLogin: login,
+		},
+	}
+	ts := newTestSessionStorage()
+	ts.onFindByToken = func(
+		_ context.Context,
+		tok aghuser.SessionToken,
+	) (s *aghuser.Session, err error) {
+		return sessions[tok], nil
+	}
+
+	mw = newAuthMiddlewareDefault(&authMiddlewareDefaultConfig{
+		logger:      testLogger,
+		rateLimiter: emptyRateLimiter{},
+		sessions:    ts,
+		users:       usersDB,
+		loginPath:   customLoginPath,
+	})
+
+	cookie = &http.Cookie{
+		Name:  sessionCookieName,
+		Value: hex.EncodeToString(token[:]),
+	}
+
+	return mw, cookie, user
+}
+
+// TestAuthMiddlewareDefault_customLoginPath ensures that when a custom login
+// path is configured, the original login page is hidden and only the custom
+// path can be used to access it.
+func TestAuthMiddlewareDefault_customLoginPath(t *testing.T) {
+	t.Parallel()
+
+	const customLoginPath = "my-login.html"
+
+	mw, cookie, user := newCustomLoginTestMiddleware(t, customLoginPath)
+
+	testCases := []struct {
+		req      *http.Request
+		wantUser *aghuser.User
+		name     string
+		wantCode int
+	}{{
+		req:      httptest.NewRequest(http.MethodGet, "/login.html", nil),
+		name:     "default_login_blocked",
+		wantCode: http.StatusForbidden,
+	}, {
+		req:      httptest.NewRequest(http.MethodGet, "/"+customLoginPath, nil),
+		wantUser: nil,
+		name:     "custom_login_served",
+		wantCode: http.StatusOK,
+	}, {
+		req:      httptest.NewRequest(http.MethodGet, "/", nil),
+		name:     "root_blocked",
+		wantCode: http.StatusForbidden,
+	}, {
+		req:      httptest.NewRequest(http.MethodGet, "/index.html", nil),
+		name:     "index_blocked",
+		wantCode: http.StatusForbidden,
+	}, {
+		req:      httptest.NewRequest(http.MethodGet, "/login.main.js", nil),
+		name:     "login_asset_public",
+		wantCode: http.StatusOK,
+	}, {
+		req:      authRequest("/"+customLoginPath, cookie, "", ""),
+		name:     "authed_custom_login_redirect",
+		wantCode: http.StatusFound,
+	}, {
+		req:      authRequest("/login.html", cookie, "", ""),
+		name:     "authed_default_login_redirect",
+		wantCode: http.StatusFound,
+	}, {
+		req:      authRequest("/", cookie, "", ""),
+		wantUser: user,
+		name:     "authed_root_ok",
+		wantCode: http.StatusOK,
+	}}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := &testAuthHandler{}
+			wrapped := mw.Wrap(h)
+
+			w := httptest.NewRecorder()
+			wrapped.ServeHTTP(w, tc.req)
+
+			assert.Equal(t, tc.wantCode, w.Code)
+			assert.Equal(t, tc.wantUser, h.user)
+		})
+	}
+}
+
+// TestAuthMiddlewareDefault_customLoginPath_rewrite ensures that a request to
+// the custom login page path is internally rewritten to /login.html.
+func TestAuthMiddlewareDefault_customLoginPath_rewrite(t *testing.T) {
+	t.Parallel()
+
+	const customLoginPath = "my-login.html"
+
+	mw, _, _ := newCustomLoginTestMiddleware(t, customLoginPath)
+
+	var seenPath string
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+	})
+	wrapped := mw.Wrap(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/"+customLoginPath, nil)
+	w := httptest.NewRecorder()
+	wrapped.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/login.html", seenPath)
 }
 
 func TestAuth_ServeHTTP_firstRun(t *testing.T) {
