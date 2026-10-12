@@ -21,13 +21,13 @@ type HTTPConfig struct {
 	// Address is the addresses on which to serve web API.
 	Address netip.AddrPort `yaml:"address"`
 
-	// SessionTTL for a web session.
-	SessionTTL timeutil.Duration `yaml:"session_ttl"`
-
 	// LoginPath is the custom login page path.  When set, the default
 	// /login.html is hidden and only the custom path can be used to access
 	// the login page.  For example, "wsshuiji.html".
 	LoginPath string `yaml:"login_path"`
+
+	// SessionTTL for a web session.
+	SessionTTL timeutil.Duration `yaml:"session_ttl"`
 }
 
 // DoHConfig is the block with DNS-over-HTTPS configuration.
