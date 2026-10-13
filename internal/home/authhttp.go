@@ -300,45 +300,19 @@ func (web *webAPI) registerAuthHandlers() {
 	web.httpReg.Register(http.MethodGet, "/control/logout", web.handleLogout)
 }
 
-// isLoginPath returns true if p is a path to the login page or its assets,
-// considering the custom login path configuration.
-func isLoginPath(p, customLogin string) (ok bool) {
-	if customLogin == "" {
-		isLogin, err := path.Match("/login.*", p)
-		if err != nil {
-			// The only error that is returned from path.Match is
-			// [path.ErrBadPattern].  This is a programmer error.
-			panic(fmt.Errorf("bad login pattern: %w", err))
-		}
-
-		return isLogin
-	}
-
-	// When a custom login path is configured, only /login.html is hidden;
-	// the login page's JS and CSS assets (e.g. /login.*.js, /login.*.css)
-	// must remain public so the page can render.
-	isLoginJS, err := path.Match("/login.*.js", p)
-	if err != nil {
-		panic(fmt.Errorf("bad login js pattern: %w", err))
-	}
-
-	isLoginCSS, err := path.Match("/login.*.css", p)
-	if err != nil {
-		panic(fmt.Errorf("bad login css pattern: %w", err))
-	}
-
-	return isLoginJS || isLoginCSS
-}
-
 // isPublicResource returns true if p is a path to a public resource.
-// customLogin is the custom login page path from configuration; when non-empty,
-// the original /login.html page is no longer considered public.
-func isPublicResource(p, customLogin string) (ok bool) {
+func isPublicResource(p string) (ok bool) {
 	isAsset, err := path.Match("/assets/*", p)
 	if err != nil {
 		// The only error that is returned from path.Match is
 		// [path.ErrBadPattern].  This is a programmer error.
 		panic(fmt.Errorf("bad asset pattern: %w", err))
+	}
+
+	isLogin, err := path.Match("/login.*", p)
+	if err != nil {
+		// Same as above.
+		panic(fmt.Errorf("bad login pattern: %w", err))
 	}
 
 	isForgotPassword, err := path.Match("/forgot_password.*", p)
@@ -357,17 +331,7 @@ func isPublicResource(p, customLogin string) (ok bool) {
 		"/install.html",
 	}
 
-	return isAsset || isLoginPath(p, customLogin) || isForgotPassword || slices.Contains(paths, p)
-}
-
-// isDoHRoute returns true if r is a request to a DoH route.  r must not be nil.
-func (mw *authMiddlewareDefault) isDoHRoute(r *http.Request) (ok bool) {
-	_, pattern := mw.mux.Handler(r)
-	if pattern == "" {
-		return false
-	}
-
-	return slices.Contains(mw.doHRoutes, pattern)
+	return isAsset || isLogin || isForgotPassword || slices.Contains(paths, p)
 }
 
 const (
@@ -383,9 +347,6 @@ type authMiddlewareDefaultConfig struct {
 	//
 	// TODO(e.burkov):  Require a logger in request's context instead.
 	logger *slog.Logger
-
-	// mux is the server's multiplexer.  It must not be nil.
-	mux *http.ServeMux
 
 	// rateLimiter manages the rate limiting for login attempts.
 	rateLimiter loginRateLimiter
@@ -406,9 +367,6 @@ type authMiddlewareDefaultConfig struct {
 	// /login.html is hidden and only this custom path can access the login
 	// page.
 	loginPath string
-
-	// doHRoutes is a list of DoH routes for public access.
-	doHRoutes []string
 }
 
 // authMiddlewareDefault is the default authentication middleware.  It searches
@@ -416,13 +374,11 @@ type authMiddlewareDefaultConfig struct {
 // passes it with the context.
 type authMiddlewareDefault struct {
 	logger         *slog.Logger
-	mux            *http.ServeMux
 	rateLimiter    loginRateLimiter
 	trustedProxies netutil.SubnetSet
 	sessions       aghuser.SessionStorage
 	users          aghuser.DB
 	loginPath      string
-	doHRoutes      []string
 }
 
 // newAuthMiddlewareDefault returns the new properly initialized
@@ -430,13 +386,11 @@ type authMiddlewareDefault struct {
 func newAuthMiddlewareDefault(c *authMiddlewareDefaultConfig) (mw *authMiddlewareDefault) {
 	return &authMiddlewareDefault{
 		logger:         c.logger,
-		mux:            c.mux,
 		rateLimiter:    c.rateLimiter,
 		trustedProxies: c.trustedProxies,
 		sessions:       c.sessions,
 		users:          c.users,
 		loginPath:      c.loginPath,
-		doHRoutes:      c.doHRoutes,
 	}
 }
 
@@ -549,7 +503,7 @@ func (mw *authMiddlewareDefault) handlePublicAccess(
 		return true
 	}
 
-	if isPublicResource(path, mw.loginPath) || mw.isDoHRoute(r) {
+	if isPublicResource(path) {
 		h.ServeHTTP(w, r)
 
 		return true

@@ -4,6 +4,7 @@ import copy from 'copy-to-clipboard';
 
 import intl from 'panel/common/intl';
 import type { Client, NormalizedTopClients } from 'panel/initialState';
+import { sortIpOrString } from 'panel/helpers/helpers';
 import { LOCAL_STORAGE_KEYS, LocalStorageHelper } from 'panel/helpers/localStorageHelper';
 import { Table, type TableColumn } from 'panel/common/ui/Table';
 import { Icon } from 'panel/common/ui/Icon';
@@ -51,9 +52,10 @@ export const PersistentClientsTable = (props: Props) => {
                     text: intl.getMessage('client_identifier'),
                     className: s.headerCell,
                 },
-                accessor: (row: Client) =>
-                    (row.ids ?? []).filter((id) => id.trim() !== '').join(','),
+                // The cell shows only the first identifier, so sort by it.
+                accessor: (row: Client) => (row.ids ?? []).find((id) => id.trim() !== '') ?? '',
                 sortable: true,
+                sortFn: sortIpOrString,
                 render: (_value: string, row: Client) => {
                     const ids = row.ids ?? [];
                     // Filter out empty strings — the backend may return trailing empty
@@ -70,11 +72,15 @@ export const PersistentClientsTable = (props: Props) => {
 
                             <div class={theme.table.cellValueText}>
                                 <div class={s.idsRow}>
-                                    <span class={cn(theme.common.textOverflow, s.idsText)}>
+                                    <span
+                                        class={cn(theme.common.textOverflow, s.idsText)}
+                                        data-testid="client-ids-text"
+                                    >
                                         {firstId}
                                     </span>
                                     <Show when={hiddenCount > 0}>
                                         <Tooltip
+                                            class={s.countDropdown}
                                             overlayClass={s.idsTooltipOverlay}
                                             content={
                                                 <div class={s.idsTooltip}>
@@ -102,7 +108,12 @@ export const PersistentClientsTable = (props: Props) => {
                                                 </div>
                                             }
                                         >
-                                            <span class={s.countLabel}>{hiddenCount}</span>
+                                            <span
+                                                class={s.countLabel}
+                                                data-testid="client-ids-count"
+                                            >
+                                                {hiddenCount}
+                                            </span>
                                         </Tooltip>
                                     </Show>
                                 </div>

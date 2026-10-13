@@ -43,7 +43,6 @@ import (
 	"github.com/AdguardTeam/golibs/hostsfile"
 	"github.com/AdguardTeam/golibs/logutil/slogutil"
 	"github.com/AdguardTeam/golibs/netutil"
-	"github.com/AdguardTeam/golibs/netutil/httputil"
 	"github.com/AdguardTeam/golibs/netutil/urlutil"
 	"github.com/AdguardTeam/golibs/osutil"
 	"github.com/AdguardTeam/golibs/osutil/executil"
@@ -431,6 +430,15 @@ func setupBindOpts(opts options) (err error) {
 	return nil
 }
 
+// safeBrowsingResolvers is a slice of static IP addresses of the safebrowsing
+// bootstrap DNS resolvers.
+var safeBrowsingResolvers = upstream.StaticResolver{
+	netip.MustParseAddr("94.140.14.15"),
+	netip.MustParseAddr("94.140.15.16"),
+	netip.MustParseAddr("2a10:50c0::bad1:ff"),
+	netip.MustParseAddr("2a10:50c0::bad2:ff"),
+}
+
 // setupDNSFilteringConf sets up DNS filtering configuration settings.  All
 // arguments except hc must not be nil.
 func setupDNSFilteringConf(
@@ -473,18 +481,9 @@ func setupDNSFilteringConf(
 	cacheTime := time.Duration(conf.CacheTime) * time.Minute
 
 	upsOpts := &upstream.Options{
-		Logger:  aghslog.NewForUpstream(baseLogger, aghslog.UpstreamTypeService),
-		Timeout: dnsTimeout,
-		Bootstrap: upstream.StaticResolver{
-			// 94.140.14.15.
-			netip.AddrFrom4([4]byte{94, 140, 14, 15}),
-			// 94.140.14.16.
-			netip.AddrFrom4([4]byte{94, 140, 14, 16}),
-			// 2a10:50c0::bad1:ff.
-			netip.AddrFrom16([16]byte{42, 16, 80, 192, 12: 186, 209, 0, 255}),
-			// 2a10:50c0::bad2:ff.
-			netip.AddrFrom16([16]byte{42, 16, 80, 192, 12: 186, 210, 0, 255}),
-		},
+		Logger:    aghslog.NewForUpstream(baseLogger, aghslog.UpstreamTypeService),
+		Timeout:   dnsTimeout,
+		Bootstrap: safeBrowsingResolvers,
 	}
 
 	sbUps, err := upstream.AddressToUpstream(defaultSafeBrowsingServer, upsOpts)
@@ -848,7 +847,7 @@ func run(
 		errors.Annotate(err, "creating dns data dir at %q: %w", dataDirPath),
 	)
 
-	auth, err := initUsers(ctx, baseLogger, workDir, mux, opts.glinetMode, glTokenFileRoot)
+	auth, err := initUsers(ctx, baseLogger, workDir, opts.glinetMode, glTokenFileRoot)
 	fatalOnError(ctx, baseLogger, err)
 
 	confModifier.setAuth(auth)
@@ -882,7 +881,14 @@ func run(
 	fatalOnError(ctx, baseLogger, err)
 
 	if !isFirstRun {
-		runDNSServer(ctx, baseLogger, tlsMgr, confModifier, statsDir, querylogDir, httpReg, hc, web.conf.mux)
+		runDNSServer(ctx, baseLogger, tlsMgr, confModifier, statsDir, querylogDir, httpReg, hc)
+
+		doHSrv := newDoHServer(&doHServerConfig{
+			handler: globalContext.dnsServer,
+			logger:  web.baseLogger.With(slogutil.KeyPrefix, "doh_server"),
+			routes:  config.HTTPConfig.DoH.Routes,
+		})
+		web.setDoHServer(doHSrv)
 	}
 
 	if !opts.noPermCheck {
@@ -896,8 +902,7 @@ func run(
 }
 
 // runDNSServer initializes and starts DNS and DHCP servers if this is not the
-// first run.  httpReg, slogLogger, tlsMgr, confModifier, and mux must not be
-// nil.
+// first run.  httpReg, slogLogger, tlsMgr, and confModifier must not be nil.
 func runDNSServer(
 	ctx context.Context,
 	slogLogger *slog.Logger,
@@ -907,9 +912,8 @@ func runDNSServer(
 	querylogDir string,
 	httpReg *aghhttp.DefaultRegistrar,
 	hc *aghnet.HostsContainer,
-	mux httputil.Router,
 ) {
-	err := initDNS(ctx, slogLogger, tlsMgr, confModifier, httpReg, statsDir, querylogDir, hc, mux)
+	err := initDNS(ctx, slogLogger, tlsMgr, confModifier, httpReg, statsDir, querylogDir, hc)
 	fatalOnError(ctx, slogLogger, err)
 
 	go func() {
@@ -1087,13 +1091,12 @@ func checkPermissions(
 }
 
 // initUsers initializes authentication module and clears the [config.Users]
-// field.  baseLogger and mux must not be nil.  glTokenRoot must not be nil if
-// isGLiNet is true.
+// field.  baseLogger must not be nil.  glTokenRoot must not be nil if isGLiNet
+// is true.
 func initUsers(
 	ctx context.Context,
 	baseLogger *slog.Logger,
 	workDir string,
-	mux *http.ServeMux,
 	isGLiNet bool,
 	glTokenRoot *os.Root,
 ) (auth *auth, err error) {
@@ -1109,11 +1112,9 @@ func initUsers(
 	dataDirPath := filepath.Join(workDir, dataDir)
 	auth, err = newAuth(ctx, &authConfig{
 		baseLogger:      baseLogger,
-		mux:             mux,
 		rateLimiter:     rateLimiter,
 		trustedProxies:  netutil.SliceSubnetSet(netutil.UnembedPrefixes(config.DNS.TrustedProxies)),
 		dbFilename:      filepath.Join(dataDirPath, sessionsDBName),
-		doHRoutes:       config.HTTPConfig.DoH.Routes,
 		users:           config.Users,
 		sessionTTL:      time.Duration(config.HTTPConfig.SessionTTL),
 		isGLiNet:        isGLiNet,
@@ -1425,8 +1426,9 @@ func cmdlineUpdate(
 	err := initDNSServer(
 		ctx,
 		dnsforward.DNSCreateParams{
-			Logger:     l,
-			TLSManager: tlsMgr,
+			Logger:      l,
+			TLSManager:  tlsMgr,
+			PrivateNets: parseSubnetSet(config.DNS.PrivateNets),
 		},
 		nil,
 		agh.EmptyConfigModifier{},

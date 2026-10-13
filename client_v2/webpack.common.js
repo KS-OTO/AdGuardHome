@@ -1,12 +1,15 @@
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
 import { CleanWebpackPlugin } from 'clean-webpack-plugin';
 import CopyPlugin from 'copy-webpack-plugin';
 import MiniCssExtractPlugin from 'mini-css-extract-plugin';
 import { BUILD_ENVS } from './constants.js';
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath properly converts file:// URLs on Windows, where URL.pathname
+// yields "/D:/..." and breaks subsequent path.resolve calls.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const RESOURCES_PATH = __dirname;
 const ENTRY_MAIN = path.resolve(RESOURCES_PATH, 'src/index.tsx');
